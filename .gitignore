@@ -1,0 +1,13 @@
+/native/windows/build/
+/native/windows/bin/
+/native/windows/test-output/
+/native/windows/prefixes/
+/native/windows/dist/
+/native/windows/__pycache__/
+/native/windows/vendor/*.zip
+/native/windows/vendor/Detours-4.0.1/lib.*/
+/native/windows/vendor/Detours-4.0.1/bin.*/
+/native/windows/vendor/Detours-4.0.1/include/
+/native/windows/vendor/Detours-4.0.1/src/obj.*/
+/.winbuild-tmp/
+/build/

@@ -1,0 +1,120 @@
+Wine GLU helper on the native Windows backend
+============================================
+
+This is the unmodified upstream dlls/glu32 implementation, built as native
+x86 and x64 PE DLLs. Wine supplies the GLU math, image scaling/mipmaps,
+tessellation and quadric code. Windows supplies OpenGL/WGL and the hardware
+driver. No Wine opengl32 or Unix driver is introduced.
+
+Demise B153's x86 GraphOGL.dll imports exactly gluBuild2DMipmaps and
+gluErrorString from GLU, plus native OpenGL/WGL entrypoints. This motivates
+the helper; it does not establish actual gameplay compatibility.
+The staged game's original files and source archive are not modified.
+Its archived renderer setting is GraphSWR; the /NODIRECTX launch alone does
+not prove that GraphOGL or GLU is used. An actual GraphOGL game check requires
+an explicit, separately tested renderer selection.
+The games-10 trial selects GraphOGL in private configuration and reaches the
+evaluation reminder, but crashes during startup before that renderer is
+observed. The native-GLU control also crashes. Wine GLU was loaded in the
+Wine trial, but actual game GLU calls/rendering remain unverified.
+
+Provider selection
+------------------
+The catalog entry is {L"glu32",{}}: there are no additional Wine dependency
+modules. glu32=b selects Wine, glu32=n selects native, and glu32=b,n permits
+native module fallback if the Wine DLL is unavailable. The native OpenGL
+backend remains native regardless of the GLU helper choice. Existing
+startup-import and runtime-loader selection handle static/dynamic clients.
+
+NURBS is an explicit upstream gap. Wine gluNewNurbsRenderer returns NULL;
+the remaining NURBS entrypoints contain unsupported assertions. Applications
+needing NURBS must select native GLU. A b,n module load order DOES NOT retry
+individual unsupported functions in native GLU. The fixture records this
+availability difference; it does not count Wine NURBS as passing coverage.
+
+The GLU version string is not provider evidence: Wine deliberately returns
+a Microsoft-compatible version string. Tests verify mapped backing-file
+identity and static import jump-thunk targets instead. Every OpenGL IAT slot
+in the selected GLU module is checked against the genuine native OpenGL DLL.
+
+Tests
+-----
+Build: build-glu32-probe.ps1 (MinGW32/64, static compiler runtimes).
+Run: test-glu32.ps1 -RuntimeDirectory <stage> -HelperDirectory <builtin-dir>.
+Use -PreCatalog for the explicit application-local standalone helper path;
+that mode does not claim integrated catalog/load-order fallback coverage.
+Use -CpuOnly to avoid creating any window or OpenGL context.
+
+The fixture verifies independently expected projection and inverse values,
+singular / zero homogeneous divisor errors, ASCII/Unicode error lookup,
+quadric error callbacks, and tessellation of a concave polygon, a hole and
+a self intersection. Tessellation checks total triangle area and callback
+data/combine weights, rather than requiring an implementation-specific
+triangle ordering.
+
+GPU cases use a brief owned 64x64 window and native WGL context. They test
+3x5 non-power-of-two mipmaps with padded/offset unpack data and preserved
+pixel-store state, complete level dimensions and texel colors, independent
+colored mipmap/scaling averages, 1D mipmap levels, invalid dimensions/formats,
+projection matrix values, sphere/disk raster pixels and tessellated concave
+pixels. Intel/default and NVIDIA/discrete fixtures are distinct, and actual
+GL_RENDERER is recorded. No SwapBuffers, game input, host modeset, audio or
+screen capture occurs. Readback is limited to the fixture's own render target.
+Each process has a 30-second runner timeout; setup failures fail the suite.
+
+Current evidence (relative to native/windows/test-output)
+-------------------------------------------------------
+Unmodified upstream builds succeeded for both architectures:
+  build-glu32-x86.log
+  build-glu32-x64.log
+  helpers-10/glu32-build-manifest.json
+  helpers-10/runtime/builtin/x86/glu32.dll
+  helpers-10/runtime/builtin/x64/glu32.dll
+Imports: kernel32.dll, ntdll.dll, opengl32.dll, ucrtbase.dll only.
+
+CPU pre-catalog differential matrix: 12/12 processes pass, covering both
+architectures, static/dynamic imports, host native, prefix native and Wine.
+  helpers-10/glu32-7cc67d0e57284649940e246c2dd3fecb/result.json
+
+GPU pre-catalog differential matrix: 24/24 processes pass, 108 checks each,
+covering x86/x64, static/dynamic, native host/native prefix/Wine helper and
+both actual Intel UHD Graphics 770 / NVIDIA RTX 4090 renderers. Recorded
+math, tessellation, scaling, mipmap and raster values match native for all
+eight corresponding Wine/native-prefix pairs. The tested Wine helper's
+entire OpenGL IAT resolves to native OpenGL in every case.
+  helpers-10/glu32-46dc4c89764448ac9713b81b90d57bd4/result.json
+  helpers-10/glu32-46dc4c89764448ac9713b81b90d57bd4/differential.json
+  helpers-10/fixture-manifest.json
+
+Independent fixture review checked ABI, callback lifetimes, output bounds
+and oracles. It prompted fixes before GPU testing: validate queried colored
+texture dimensions before readback, explicitly restore / assert PACK state,
+and require a successful GPU quadric allocation rather than skipping pixels.
+Reviewed source SHA256:
+  685913D715DD11038CC8C0940B7E05684260ADD627820D475A871746980ABC5D
+
+Integrated runtime10-glu matrix: 32/32 processes pass. This includes the same
+24 hardware/provider/import cases through normal catalog selection, plus
+four missing-builtin b,n cases that select the genuine native module and
+four strict-b cases that reject the missing builtin before app startup.
+Fallback and strict cases cover both static/dynamic clients and x86/x64.
+  helpers-10/glu32-442d2a3698294665bce93daaa334742e/result.json
+
+Additional x86 default-renderer comparison passes 3/3: native host, native
+prefix and Wine GLU prefix, with the prefix cases inside an 800x600 virtual
+desktop. All math/geometry/image checks remain enabled, and OpenGL stays
+native. This is the architecture/API combination relevant to GraphOGL.
+  helpers-10/glu32-6b6842efea884444bff3e8179725f6a2/result.json
+
+No process timed out; the runtime GLU hashes remain those in the build
+manifest. No production Wine GLU changes or native OpenGL replacement were
+needed for the passing tests. Root integration adds glu32 to the shared
+builtin catalog, default Wine build list, package modules and package tests;
+there are no additional Wine dependency modules or new shim hooks.
+
+Notices
+-------
+glu32-notices.txt preserves the SGI Free Software License B 2.0 notice and
+1991-2000 Silicon Graphics copyright, Eric Veach tessellation attribution,
+Wine's LGPL glue authors and the public-domain GLU declaration notice.
+Package it as LICENSE-GLU.txt alongside the existing Wine LGPL materials.

@@ -1,0 +1,2946 @@
+diff --git a/dlls/d3d11/d3d11_main.c b/dlls/d3d11/d3d11_main.c
+index 7598631869331a644fdf5d1e1984a3d8d03cc71b..c856ac7d6d04a5dfd03c2934873c246bf9cdf6c7 100644
+--- a/dlls/d3d11/d3d11_main.c
++++ b/dlls/d3d11/d3d11_main.c
+@@ -25,6 +25,31 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
+ 
++/* Native Windows OpenGL drivers may create a D3D11 device internally. Routing
++ * that call back through Wine's OpenGL renderer can deadlock the driver's
++ * worker against the Wine command stream. The optional native-host shim
++ * classifies the actual public-entry caller; applications still use Wine. */
++static BOOL create_system_device(const void *caller, UINT entrypoint, IDXGIAdapter *adapter,
++        D3D_DRIVER_TYPE driver_type, HMODULE software, UINT flags, const D3D_FEATURE_LEVEL *levels,
++        UINT level_count, UINT sdk_version, const DXGI_SWAP_CHAIN_DESC *description,
++        IDXGISwapChain **swapchain, ID3D11Device **device, D3D_FEATURE_LEVEL *feature_level,
++        ID3D11DeviceContext **context, HRESULT *result)
++{
++    BOOL (WINAPI *create_device)(const void *, UINT, IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE,
++            UINT, const D3D_FEATURE_LEVEL *, UINT, UINT, const DXGI_SWAP_CHAIN_DESC *,
++            IDXGISwapChain **, ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **, HRESULT *);
++    HMODULE shim;
++
++    shim = GetModuleHandleW(sizeof(void *) == 8 ? L"winedows64.dll" : L"winedows32.dll");
++    if (!shim || !(create_device = (void *)GetProcAddress(shim, "WinedowsCreateSystemD3D11Device")))
++        return FALSE;
++    if (!create_device(caller, entrypoint, adapter, driver_type, software, flags, levels, level_count,
++            sdk_version, description, swapchain, device, feature_level, context, result))
++        return FALSE;
++    TRACE("Native host device call from %p, entrypoint %u, hr %#lx.\n", caller, entrypoint, *result);
++    return TRUE;
++}
++
+ static const char *debug_d3d_driver_type(D3D_DRIVER_TYPE driver_type)
+ {
+     switch (driver_type)
+@@ -288,6 +313,12 @@ HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter *adapter, D3D_DRIVER_TYPE driver_t
+         const D3D_FEATURE_LEVEL *feature_levels, UINT levels, UINT sdk_version, ID3D11Device **device_out,
+         D3D_FEATURE_LEVEL *obtained_feature_level, ID3D11DeviceContext **immediate_context)
+ {
++    HRESULT hr;
++
++    if (create_system_device(__builtin_return_address(0), 0, adapter, driver_type, swrast, flags,
++            feature_levels, levels, sdk_version, NULL, NULL, device_out,
++            obtained_feature_level, immediate_context, &hr))
++        return hr;
+     return d3d11_create_device(adapter, driver_type, swrast, flags, feature_levels,
+             levels, sdk_version, device_out, obtained_feature_level, immediate_context);
+ }
+@@ -303,6 +334,11 @@ HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *adapter, D3D_DRIVER_T
+     ID3D11Device *device;
+     HRESULT hr;
+ 
++    if (create_system_device(__builtin_return_address(0), 1, adapter, driver_type, swrast, flags,
++            feature_levels, levels, sdk_version, swapchain_desc, swapchain, device_out,
++            obtained_feature_level, immediate_context, &hr))
++        return hr;
++
+     TRACE("adapter %p, driver_type %s, swrast %p, flags %#x, feature_levels %p, levels %u, sdk_version %u, "
+             "swapchain_desc %p, swapchain %p, device %p, obtained_feature_level %p, immediate_context %p.\n",
+             adapter, debug_d3d_driver_type(driver_type), swrast, flags, feature_levels, levels, sdk_version,
+diff --git a/dlls/d3dx10_33/d3dx10_33_main.c b/dlls/d3dx10_33/d3dx10_33_main.c
+index 5635bc23197c7be2bc2ca0d12dfcbf6cd3f4101e..55206b582aa32e2f77b335f120bdbe945f7f1dc1 100644
+--- a/dlls/d3dx10_33/d3dx10_33_main.c
++++ b/dlls/d3dx10_33/d3dx10_33_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+-    if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 33))
+-        return TRUE;
++    if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 1001))
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_34/d3dx10_34_main.c b/dlls/d3dx10_34/d3dx10_34_main.c
+index b387dbdebcf14976399701f494e18f0f9fa2f6a7..f81bff2cdc48bd57abc38b2a48a31111927866e7 100644
+--- a/dlls/d3dx10_34/d3dx10_34_main.c
++++ b/dlls/d3dx10_34/d3dx10_34_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 34))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_35/d3dx10_35_main.c b/dlls/d3dx10_35/d3dx10_35_main.c
+index 228bdd90696e666461012f91179fcc368f35f5fe..dbc38fd81004af6aafb1d67f2d05665e39dd49a5 100644
+--- a/dlls/d3dx10_35/d3dx10_35_main.c
++++ b/dlls/d3dx10_35/d3dx10_35_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 35))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_36/d3dx10_36_main.c b/dlls/d3dx10_36/d3dx10_36_main.c
+index 937872faa2f6997b59075094dc9c6810fa8af148..a473d5972f5bc4d249b1dc060a3b3d84180cbd67 100644
+--- a/dlls/d3dx10_36/d3dx10_36_main.c
++++ b/dlls/d3dx10_36/d3dx10_36_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 36))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_37/d3dx10_37_main.c b/dlls/d3dx10_37/d3dx10_37_main.c
+index ac7b20a7e12d016cad3fe54f65514b4414b98bed..9ba6a0f1249f5a36577fa7941a6630e715f7e386 100644
+--- a/dlls/d3dx10_37/d3dx10_37_main.c
++++ b/dlls/d3dx10_37/d3dx10_37_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 37))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_38/d3dx10_38_main.c b/dlls/d3dx10_38/d3dx10_38_main.c
+index bd6bf110a2120c9e5251b1b74c2256e5519e1cc9..e8c96e85f2c6a90e221c22ba214d3b90f00e2eff 100644
+--- a/dlls/d3dx10_38/d3dx10_38_main.c
++++ b/dlls/d3dx10_38/d3dx10_38_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 38))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_39/d3dx10_39_main.c b/dlls/d3dx10_39/d3dx10_39_main.c
+index 5d4e050bf329ed563d30878c0a1b8e692d14b1d9..48f3bbe12cab22a5ac347247031ade5b78dc71ac 100644
+--- a/dlls/d3dx10_39/d3dx10_39_main.c
++++ b/dlls/d3dx10_39/d3dx10_39_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 39))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_40/d3dx10_40_main.c b/dlls/d3dx10_40/d3dx10_40_main.c
+index 5eab5c00c8effbae7207b8c6fdfcaca91c869c73..40cfdee664684733242f4865a7568dd11f03bbcb 100644
+--- a/dlls/d3dx10_40/d3dx10_40_main.c
++++ b/dlls/d3dx10_40/d3dx10_40_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 40))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_41/d3dx10_41_main.c b/dlls/d3dx10_41/d3dx10_41_main.c
+index 15fe2f03b6bb01dcb8d0a72d465130c285c5a8a0..85958bb9ced6f59f9f216983ebc84ed3d85f9f25 100644
+--- a/dlls/d3dx10_41/d3dx10_41_main.c
++++ b/dlls/d3dx10_41/d3dx10_41_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 41))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_42/d3dx10_42_main.c b/dlls/d3dx10_42/d3dx10_42_main.c
+index 03fe8e7926c0106fdd4dd96e1fe97ffa475d5e9f..1ef35aecf7b7dc63258f89466c386fb738576526 100644
+--- a/dlls/d3dx10_42/d3dx10_42_main.c
++++ b/dlls/d3dx10_42/d3dx10_42_main.c
+@@ -35,10 +35,10 @@
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 42))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+diff --git a/dlls/d3dx10_43/d3dx10_43_main.c b/dlls/d3dx10_43/d3dx10_43_main.c
+index ec7407508d306be54e57a8c2247745da44d081b5..52e415491cf366f60ab7b1f62b2d340d73114a9e 100644
+--- a/dlls/d3dx10_43/d3dx10_43_main.c
++++ b/dlls/d3dx10_43/d3dx10_43_main.c
+@@ -40,12 +40,12 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dx);
+  *
+  * Checks whether we are compiling against the correct d3d and d3dx library.
+  */
+-BOOL WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
++HRESULT WINAPI D3DX10CheckVersion(UINT d3dsdkvers, UINT d3dxsdkvers)
+ {
+     if ((d3dsdkvers == D3D10_SDK_VERSION) && (d3dxsdkvers == 43))
+-        return TRUE;
++        return S_OK;
+ 
+-    return FALSE;
++    return E_FAIL;
+ }
+ 
+ HRESULT WINAPI D3DX10CreateEffectPoolFromMemory(const void *data, SIZE_T datasize, const char *filename,
+diff --git a/dlls/d3dx10_43/tests/d3dx10.c b/dlls/d3dx10_43/tests/d3dx10.c
+index 3ea4499f20e9288f1f439a5b357f6e0d89d85001..29bb4f09d7cdc28e4f5695b7003736860df815ec 100644
+--- a/dlls/d3dx10_43/tests/d3dx10.c
++++ b/dlls/d3dx10_43/tests/d3dx10.c
+@@ -7059,10 +7059,32 @@ static void test_preprocess_shader(void)
+     ID3D10Blob_Release(preprocessed);
+ }
+ 
++static void test_check_version(void)
++{
++    static const struct {UINT d3d, d3dx; HRESULT expected;} cases[] =
++    {
++        {D3D10_SDK_VERSION, 43, S_OK},
++        {D3D10_SDK_VERSION, 42, E_FAIL},
++        {D3D10_SDK_VERSION, 44, E_FAIL},
++        {0, 43, E_FAIL},
++        {D3D10_SDK_VERSION + 1, 43, E_FAIL},
++        {~0u, ~0u, E_FAIL},
++    };
++    unsigned int i;
++    HRESULT hr;
++
++    for (i = 0; i < ARRAY_SIZE(cases); ++i)
++    {
++        hr = D3DX10CheckVersion(cases[i].d3d, cases[i].d3dx);
++        ok(hr == cases[i].expected, "Case %u: unexpected hr %#lx, expected %#lx.\n", i, hr, cases[i].expected);
++    }
++}
++
+ START_TEST(d3dx10)
+ {
+     HMODULE wined3d;
+ 
++    test_check_version();
+     if ((wined3d = GetModuleHandleA("wined3d.dll")))
+     {
+         enum wined3d_renderer (CDECL *p_wined3d_get_renderer)(void);
+diff --git a/dlls/d3dx11_42/d3dx11_42_main.c b/dlls/d3dx11_42/d3dx11_42_main.c
+index 0692e2c8caad84daa3de8e6457f951bdb7f4299d..0e69792c5fa713094a17b7c5fe590a3defde6e8b 100644
+--- a/dlls/d3dx11_42/d3dx11_42_main.c
++++ b/dlls/d3dx11_42/d3dx11_42_main.c
+@@ -25,9 +25,9 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3dx);
+ 
+-BOOL WINAPI D3DX11CheckVersion(UINT d3d_sdk_ver, UINT d3dx_sdk_ver)
++HRESULT WINAPI D3DX11CheckVersion(UINT d3d_sdk_ver, UINT d3dx_sdk_ver)
+ {
+     TRACE("d3d_sdk_ver %u, d3dx_sdk_ver %u.\n", d3d_sdk_ver, d3dx_sdk_ver);
+ 
+-    return d3d_sdk_ver == D3D11_SDK_VERSION && d3dx_sdk_ver == D3DX11_SDK_VERSION;
++    return d3d_sdk_ver == D3D11_SDK_VERSION && d3dx_sdk_ver == D3DX11_SDK_VERSION ? S_OK : E_FAIL;
+ }
+diff --git a/dlls/d3dx11_43/d3dx11_43_main.c b/dlls/d3dx11_43/d3dx11_43_main.c
+index 00c1db35e42caa2dc01e626da97e9b1ce1712d7e..2987ff7002c4418e91399d5915ad832be73ac77b 100644
+--- a/dlls/d3dx11_43/d3dx11_43_main.c
++++ b/dlls/d3dx11_43/d3dx11_43_main.c
+@@ -33,9 +33,9 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3dx);
+ 
+-BOOL WINAPI D3DX11CheckVersion(UINT d3d_sdk_ver, UINT d3dx_sdk_ver)
++HRESULT WINAPI D3DX11CheckVersion(UINT d3d_sdk_ver, UINT d3dx_sdk_ver)
+ {
+-    return d3d_sdk_ver == D3D11_SDK_VERSION && d3dx_sdk_ver == D3DX11_SDK_VERSION;
++    return d3d_sdk_ver == D3D11_SDK_VERSION && d3dx_sdk_ver == D3DX11_SDK_VERSION ? S_OK : E_FAIL;
+ }
+ 
+ HRESULT WINAPI D3DX11FilterTexture(ID3D11DeviceContext *context, ID3D11Resource *texture, UINT src_level, UINT filter)
+diff --git a/dlls/d3dx11_43/tests/d3dx11.c b/dlls/d3dx11_43/tests/d3dx11.c
+index 8210329e6d5e58a48be1a32d76220ec53384f5b9..dc21ddf2d9db2a472c6b6a04f9b987e6eb200e7d 100644
+--- a/dlls/d3dx11_43/tests/d3dx11.c
++++ b/dlls/d3dx11_43/tests/d3dx11.c
+@@ -25,6 +25,32 @@
+ #include <stdint.h>
+ #include <assert.h>
+ 
++static void test_D3DX11CheckVersion(void)
++{
++    static const struct
++    {
++        UINT d3d, d3dx;
++        HRESULT result;
++    } tests[] =
++    {
++        {D3D11_SDK_VERSION, 43, S_OK},
++        {D3D11_SDK_VERSION, 42, E_FAIL},
++        {D3D11_SDK_VERSION, 44, E_FAIL},
++        {0, 43, E_FAIL},
++        {D3D11_SDK_VERSION + 1, 43, E_FAIL},
++        {~0u, ~0u, E_FAIL},
++    };
++    unsigned int i;
++    HRESULT hr;
++
++    for (i = 0; i < ARRAY_SIZE(tests); ++i)
++    {
++        hr = D3DX11CheckVersion(tests[i].d3d, tests[i].d3dx);
++        ok(hr == tests[i].result, "Version %u, %u returned %#lx, expected %#lx.\n",
++                tests[i].d3d, tests[i].d3dx, hr, tests[i].result);
++    }
++}
++
+ static const D3DX11_IMAGE_LOAD_INFO d3dx11_default_load_info =
+ {
+     D3DX11_DEFAULT, D3DX11_DEFAULT, D3DX11_DEFAULT, D3DX11_DEFAULT, D3DX11_DEFAULT, D3DX11_DEFAULT, D3DX11_DEFAULT,
+@@ -4599,6 +4625,7 @@ START_TEST(d3dx11)
+             wined3d_opengl = true;
+     }
+ 
++    test_D3DX11CheckVersion();
+     test_D3DX11CreateAsyncMemoryLoader();
+     test_D3DX11CreateAsyncFileLoader();
+     test_D3DX11CreateAsyncResourceLoader();
+diff --git a/dlls/dsound/primary.c b/dlls/dsound/primary.c
+index 7ed0dc755e3b516690862371060840f9384ecc62..f6e3325dc494a917d47a02d55ca99a0f803e75a0 100644
+--- a/dlls/dsound/primary.c
++++ b/dlls/dsound/primary.c
+@@ -318,6 +318,21 @@ HRESULT DSOUND_ReopenDevice(DirectSoundDevice *device, BOOL forcewave)
+         WARN("GetStreamLatency failed with %08lx\n", hres);
+         goto err;
+     }
++    /* Native Windows WASAPI can report zero stream latency. A zero fragment
++     * leaves the mixer with no frames to consume, despite a running client.
++     * Use the endpoint's actual shared-mode period in that case. */
++    if (period <= 0) {
++        hres = IAudioClient_GetDevicePeriod(client, &period, NULL);
++        if (FAILED(hres)) {
++            WARN("GetDevicePeriod failed with %08lx\n", hres);
++            goto err;
++        }
++        if (period <= 0) {
++            WARN("Device returned a non-positive mixing period\n");
++            hres = E_FAIL;
++            goto err;
++        }
++    }
+     hres = IAudioClient_GetBufferSize(client, &acbuf_frames);
+     if (FAILED(hres)) {
+         WARN("GetBufferSize failed with %08lx\n", hres);
+@@ -327,6 +342,12 @@ HRESULT DSOUND_ReopenDevice(DirectSoundDevice *device, BOOL forcewave)
+     period_ms = (period + 9999) / 10000;
+     frag_frames = MulDiv(wfx->nSamplesPerSec, period, 10000000);
+ 
++    if (!frag_frames || !acbuf_frames) {
++        WARN("Device returned an empty mixing period or buffer\n");
++        hres = E_FAIL;
++        goto err;
++    }
++
+     aclen_frames = min(acbuf_frames, 3 * frag_frames);
+ 
+     TRACE("period %lu ms frag_frames %lu buf_frames %u\n", period_ms, frag_frames, aclen_frames);
+diff --git a/dlls/dxgi/dxgi_main.c b/dlls/dxgi/dxgi_main.c
+index ca1fb52553578b42e8202e7a79bc0b0c54af485d..c13e5277cf7837d5fa6302e1dd8d9b692c4d8f61 100644
+--- a/dlls/dxgi/dxgi_main.c
++++ b/dlls/dxgi/dxgi_main.c
+@@ -30,6 +30,23 @@ struct dxgi_main
+ };
+ static struct dxgi_main dxgi_main;
+ 
++/* A native Windows OpenGL ICD may import DXGI itself (Intel ControlLib does).
++ * Such backend calls must use the host DXGI implementation or creating a Wine
++ * factory recursively initializes the same OpenGL ICD. Applications still use
++ * Wine's factory; the optional native-host shim decides from the actual caller.
++ * No shim means the ordinary Wine implementation below is unchanged. */
++static BOOL create_system_factory(const void *caller, UINT entrypoint, UINT flags,
++        REFIID iid, void **factory, HRESULT *result)
++{
++    BOOL (WINAPI *create_factory)(const void *, UINT, UINT, REFIID, void **, HRESULT *);
++    HMODULE shim;
++
++    shim = GetModuleHandleW(sizeof(void *) == 8 ? L"winedows64.dll" : L"winedows32.dll");
++    if (!shim || !(create_factory = (void *)GetProcAddress(shim, "WinedowsCreateSystemDXGIFactory")))
++        return FALSE;
++    return create_factory(caller, entrypoint, flags, iid, factory, result);
++}
++
+ static void dxgi_main_cleanup(void)
+ {
+     free(dxgi_main.device_layers);
+@@ -55,6 +72,11 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
+ 
+ HRESULT WINAPI CreateDXGIFactory2(UINT flags, REFIID iid, void **factory)
+ {
++    HRESULT result;
++
++    if (create_system_factory(__builtin_return_address(0), 2, flags, iid, factory, &result))
++        return result;
++
+     TRACE("flags %#x, iid %s, factory %p.\n", flags, debugstr_guid(iid), factory);
+ 
+     if (flags)
+@@ -65,6 +87,11 @@ HRESULT WINAPI CreateDXGIFactory2(UINT flags, REFIID iid, void **factory)
+ 
+ HRESULT WINAPI CreateDXGIFactory1(REFIID iid, void **factory)
+ {
++    HRESULT result;
++
++    if (create_system_factory(__builtin_return_address(0), 1, 0, iid, factory, &result))
++        return result;
++
+     TRACE("iid %s, factory %p.\n", debugstr_guid(iid), factory);
+ 
+     return dxgi_factory_create(iid, factory, TRUE);
+@@ -72,6 +99,11 @@ HRESULT WINAPI CreateDXGIFactory1(REFIID iid, void **factory)
+ 
+ HRESULT WINAPI CreateDXGIFactory(REFIID iid, void **factory)
+ {
++    HRESULT result;
++
++    if (create_system_factory(__builtin_return_address(0), 0, 0, iid, factory, &result))
++        return result;
++
+     TRACE("iid %s, factory %p.\n", debugstr_guid(iid), factory);
+ 
+     return dxgi_factory_create(iid, factory, FALSE);
+diff --git a/dlls/dxgi/factory.c b/dlls/dxgi/factory.c
+index ebdb42a3806eaa607a93a394a440b159931f8e33..a389a644fa41d292a7d0d60fb6d0f04aa81129d0 100644
+--- a/dlls/dxgi/factory.c
++++ b/dlls/dxgi/factory.c
+@@ -610,8 +610,15 @@ HWND dxgi_factory_get_device_window(struct dxgi_factory *factory)
+ 
+     if (!factory->device_window)
+     {
++        /* Native Win32 Vulkan cannot create a swapchain for an empty surface.
++         * This private, invisible window is only used for the device's implicit
++         * swapchain. A popup avoids the native minimum frame width, and leaves
++         * application window geometry and surface capabilities untouched. */
++        BOOL native_windows = !GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version");
++
+         if (!(factory->device_window = CreateWindowA("static", "DXGI device window",
+-                WS_DISABLED, 0, 0, 0, 0, NULL, NULL, NULL, NULL)))
++                WS_DISABLED | (native_windows ? WS_POPUP : 0), 0, 0,
++                native_windows ? 1 : 0, native_windows ? 1 : 0, NULL, NULL, NULL, NULL)))
+         {
+             wined3d_mutex_unlock();
+             ERR("Failed to create a window.\n");
+diff --git a/dlls/gdiplus/font.c b/dlls/gdiplus/font.c
+index 5daa9108e0282be8ee9e8ff00c5775153ce818fc..10dc184295eb69a994dccf5687d7af2578df7dc0 100644
+--- a/dlls/gdiplus/font.c
++++ b/dlls/gdiplus/font.c
+@@ -1140,6 +1140,7 @@ GpStatus WINGDIPAPI GdipPrivateAddFontFile(GpFontCollection *collection, GDIPCON
+ 
+ #define TT_MAC_ID_SIMPLIFIED_CHINESE    25
+ 
++#define NAME_ID_FONT_FAMILY_NAME 1
+ #define NAME_ID_FULL_FONT_NAME  4
+ 
+ typedef struct {
+@@ -1366,6 +1367,7 @@ static WCHAR *copy_name_table_string( const tt_name_record *name, const BYTE *da
+     case TT_PLATFORM_APPLE_UNICODE:
+     case TT_PLATFORM_MICROSOFT:
+         ret = malloc((name_len / 2 + 1) * sizeof(WCHAR));
++        if (!ret) return NULL;
+         for (len = 0; len < name_len / 2; len++)
+             ret[len] = (data[len * 2] << 8) | data[len * 2 + 1];
+         ret[len] = 0;
+@@ -1376,6 +1378,7 @@ static WCHAR *copy_name_table_string( const tt_name_record *name, const BYTE *da
+         if (!len)
+             return NULL;
+         ret = malloc(len * sizeof(WCHAR));
++        if (!ret) return NULL;
+         len = MultiByteToWideChar( codepage, 0, (char *)data, name_len, ret, len - 1 );
+         ret[len] = 0;
+         return ret;
+@@ -1403,6 +1406,7 @@ static WCHAR *load_ttf_name_id( const BYTE *mem, DWORD_PTR size, DWORD id )
+         return NULL;
+ 
+     pos = sizeof(*header);
++    if (count > (size - pos) / sizeof(tt_table_directory)) return NULL;
+     for (i = 0; i < count; i++)
+     {
+         const tt_table_directory *table_directory = (const tt_table_directory*)&mem[pos];
+@@ -1416,14 +1420,12 @@ static WCHAR *load_ttf_name_id( const BYTE *mem, DWORD_PTR size, DWORD id )
+     if (i >= count)
+         return NULL;
+ 
+-    if (ofs >= size)
+-        return NULL;
++    if (ofs > size || sizeof(*name_table) > size - ofs) return NULL;
+     pos = ofs + sizeof(*name_table);
+-    if (pos > size)
+-        return NULL;
+     name_table = (const tt_name_table*)&mem[ofs];
+     name_record_table = (const tt_name_record *)&mem[pos];
+     count =  GET_BE_WORD(name_table->count);
++    if (count > (size - pos) / sizeof(*name_record)) return NULL;
+     if (GET_BE_WORD(name_table->string_offset) >= size - ofs) return NULL;
+     ofs += GET_BE_WORD(name_table->string_offset);
+     for (i = 0; i < ARRAY_SIZE(platform_id_table); i++)
+@@ -1431,9 +1433,6 @@ static WCHAR *load_ttf_name_id( const BYTE *mem, DWORD_PTR size, DWORD id )
+         for (j = 0; j < count; j++)
+         {
+             name_record = name_record_table + j;
+-            if ((const BYTE *)name_record - mem > size)
+-                return NULL;
+-
+             if (GET_BE_WORD(name_record->platform_id) != platform_id_table[i]) continue;
+             if (GET_BE_WORD(name_record->name_id) != id) continue;
+             if (GET_BE_WORD(name_record->offset) >= size - ofs) return NULL;
+@@ -1485,7 +1484,7 @@ GpStatus WINGDIPAPI GdipPrivateAddMemoryFont(GpFontCollection* fontCollection,
+     GpStatus ret = Ok;
+     TRACE("%p, %p, %d\n", fontCollection, memory, length);
+ 
+-    if (!fontCollection || !memory || !length)
++    if (!fontCollection || !memory || length <= 0)
+         return InvalidParameter;
+ 
+     name = load_ttf_name_id(memory, length, NAME_ID_FULL_FONT_NAME);
+@@ -1495,11 +1494,15 @@ GpStatus WINGDIPAPI GdipPrivateAddMemoryFont(GpFontCollection* fontCollection,
+     font = AddFontMemResourceEx((void*)memory, length, NULL, &count);
+     TRACE("%s: %p/%lu\n", debugstr_w(name), font, count);
+     if (!font || !count)
++    {
++        if (font) RemoveFontMemResourceEx(font);
+         ret = InvalidParameter;
++    }
+     else
+     {
+         struct add_font_param param;
+-        LOGFONTW lfw;
++        LOGFONTW lfw = {0};
++        INT original_count = fontCollection->count;
+ 
+         param.hdc = CreateCompatibleDC(0);
+ 
+@@ -1513,10 +1516,50 @@ GpStatus WINGDIPAPI GdipPrivateAddMemoryFont(GpFontCollection* fontCollection,
+ 
+         param.collection = fontCollection;
+         param.is_system = FALSE;
++        param.stat = Ok;
+         if (!EnumFontFamiliesExW(param.hdc, &lfw, add_font_proc, (LPARAM)&param, 0))
+             ret = param.stat;
+ 
++        if (ret == Ok && fontCollection->count == original_count)
++        {
++            /* Windows memory fonts are process-private and not enumerable.
++             * Select the registered face directly, rejecting any substituted
++             * host font before reusing the normal family/metrics path. */
++            WCHAR face[LF_FACESIZE] = {0}, *family_name;
++            HGDIOBJ previous = NULL;
++            HFONT selected = NULL;
++
++            ret = FontFamilyNotFound;
++            family_name = load_ttf_name_id(memory, length, NAME_ID_FONT_FAMILY_NAME);
++            if (family_name && lstrlenW(family_name) >= LF_FACESIZE)
++                family_name[LF_FACESIZE - 1] = 0;
++            /* The fallback resolves one SFNT face. Collections / multiple
++             * registered faces require explicit per-face lifetime tracking. */
++            if (count != 1)
++                ret = NotImplemented;
++            else if ((selected = CreateFontIndirectW(&lfw))
++                    && (previous = SelectObject(param.hdc, selected)) && previous != HGDI_ERROR
++                    && GetTextFaceW(param.hdc, ARRAY_SIZE(face), face)
++                    && (!wcsicmp(face, name) || (family_name && !wcsicmp(face, family_name))))
++            {
++                lstrcpyW(lfw.lfFaceName, face);
++                if (add_font_proc(&lfw, NULL, TRUETYPE_FONTTYPE, (LPARAM)&param))
++                    ret = Ok;
++                else
++                    ret = param.stat;
++            }
++            if (previous && previous != HGDI_ERROR) SelectObject(param.hdc, previous);
++            if (selected) DeleteObject(selected);
++            free(family_name);
++        }
++
+         DeleteDC(param.hdc);
++        if (ret != Ok)
++        {
++            while (fontCollection->count > original_count)
++                GdipDeleteFontFamily(fontCollection->FontFamilies[--fontCollection->count]);
++            RemoveFontMemResourceEx(font);
++        }
+     }
+     free(name);
+     return ret;
+@@ -1588,7 +1631,9 @@ static INT CALLBACK add_font_proc(const LOGFONTW *lfw, const TEXTMETRICW *ntm,
+ 
+     param->stat = Ok;
+ 
+-    if (type == RASTER_FONTTYPE)
++    /* Legacy vector fonts also lack the TrueType metrics used below. They are
++     * not GDI+ font families; one must not abort the entire installed list. */
++    if (!(type & TRUETYPE_FONTTYPE))
+         return 1;
+ 
+     /* skip rotated fonts */
+diff --git a/dlls/mcicda/mcicda.c b/dlls/mcicda/mcicda.c
+index 59acbcb6d4cbedd39804856535c7ab4734a19fc3..ded8c29d6da9ef80e2c434d1d3c02777cc76bff3 100644
+--- a/dlls/mcicda/mcicda.c
++++ b/dlls/mcicda/mcicda.c
+@@ -247,7 +247,9 @@ static void MCICDA_Notify(DWORD_PTR hWndCallBack, WINE_MCICDAUDIO* wmcda, UINT w
+     MCIDEVICEID wDevID = wmcda->wNotifyDeviceID;
+     HANDLE old = InterlockedExchangePointer(&wmcda->hCallback, NULL);
+     if (old) mciDriverNotify(old, wDevID, MCI_NOTIFY_SUPERSEDED);
+-    mciDriverNotify(HWND_32(LOWORD(hWndCallBack)), wDevID, wStatus);
++    /* Win32 MCI supplies a pointer-sized window handle. Truncating it to a
++     * Win16 handle loses notification delivery on native 64-bit Windows. */
++    mciDriverNotify((HWND)hWndCallBack, wDevID, wStatus);
+ }
+ 
+ /**************************************************************************
+@@ -516,7 +518,7 @@ static DWORD MCICDA_Open(UINT wDevID, DWORD dwFlags, LPMCI_OPEN_PARMSW lpOpenPar
+     }
+ 
+     if (dwFlags & MCI_NOTIFY) {
+-	mciDriverNotify(HWND_32(LOWORD(lpOpenParms->dwCallback)),
++	mciDriverNotify((HWND)lpOpenParms->dwCallback,
+ 			dwDeviceID, MCI_NOTIFY_SUCCESSFUL);
+     }
+     return 0;
+@@ -940,7 +942,7 @@ static DWORD MCICDA_Play(UINT wDevID, DWORD dwFlags, LPMCI_PLAY_PARMS lpParms)
+     TRACE("Playing from %lu to %lu\n", start, end);
+ 
+     oldcb = InterlockedExchangePointer(&wmcda->hCallback,
+-	(dwFlags & MCI_NOTIFY) ? HWND_32(LOWORD(lpParms->dwCallback)) : NULL);
++	(dwFlags & MCI_NOTIFY) ? (HWND)lpParms->dwCallback : NULL);
+     if (oldcb) mciDriverNotify(oldcb, wmcda->wNotifyDeviceID, MCI_NOTIFY_ABORTED);
+ 
+     if (start == end || start == FRAME_OF_TOC(toc,toc.LastTrack+1)-1) {
+diff --git a/dlls/mfreadwrite/reader.c b/dlls/mfreadwrite/reader.c
+index d7653c2dd14bbcd70d0f7f8b713463619c692982..5ecc0e78e13fa349bbb63af92519f4e6c21a0405 100644
+--- a/dlls/mfreadwrite/reader.c
++++ b/dlls/mfreadwrite/reader.c
+@@ -51,17 +51,21 @@ struct stream_response
+     DWORD stream_flags;
+     LONGLONG timestamp;
+     IMFSample *sample;
++    UINT64 id;
++    BOOL reserved, scheduled;
+ };
+ 
+ enum media_stream_state
+ {
+     STREAM_STATE_READY = 0,
++    STREAM_STATE_DRAINING,
+     STREAM_STATE_EOS,
+ };
+ 
+ enum media_source_state
+ {
+     SOURCE_STATE_STOPPED = 0,
++    SOURCE_STATE_STARTING,
+     SOURCE_STATE_STARTED,
+ };
+ 
+@@ -82,6 +86,8 @@ struct transform_entry
+     GUID category;
+     BOOL hidden;
+     BOOL attributes_initialized;
++    IMFSample *pending_input;
++    BOOL draining, drain_sent, drained, discontinuity;
+ };
+ 
+ struct media_stream
+@@ -97,6 +103,9 @@ struct media_stream
+     unsigned int flags;
+     unsigned int requests;
+     unsigned int responses;
++    struct list deferred_reads;
++    BOOL callback_active;
++    BOOL drain_read;
+     LONGLONG last_sample_ts;
+     struct source_reader *reader;
+ };
+@@ -114,12 +123,14 @@ struct source_reader_async_command
+     IUnknown IUnknown_iface;
+     LONG refcount;
+     enum source_reader_async_op op;
++    struct list entry;
+     union
+     {
+         struct
+         {
+             unsigned int flags;
+             unsigned int stream_index;
++            BOOL deferred, retry_queued, cancelled;
+         } read;
+         struct
+         {
+@@ -133,6 +144,7 @@ struct source_reader_async_command
+         struct
+         {
+             unsigned int stream_index;
++            UINT64 response_id;
+         } sample;
+         struct
+         {
+@@ -172,6 +184,7 @@ struct source_reader
+     enum media_source_state source_state;
+     struct media_stream *streams;
+     struct list responses;
++    UINT64 next_response_id;
+     CRITICAL_SECTION cs;
+     CONDITION_VARIABLE sample_event;
+     CONDITION_VARIABLE state_event;
+@@ -204,6 +217,22 @@ static struct source_reader_async_command *impl_from_async_command_IUnknown(IUnk
+ }
+ 
+ static void source_reader_release_responses(struct source_reader *reader, struct media_stream *stream);
++static HRESULT source_reader_resume_transforms(struct source_reader *reader, struct media_stream *stream);
++static HRESULT source_reader_start_source(struct source_reader *reader);
++static void source_reader_retry_deferred(struct source_reader *reader, struct media_stream *stream);
++
++static void media_stream_cancel_deferred(struct media_stream *stream)
++{
++    struct source_reader_async_command *command, *next;
++
++    LIST_FOR_EACH_ENTRY_SAFE(command, next, &stream->deferred_reads, struct source_reader_async_command, entry)
++    {
++        list_remove(&command->entry);
++        command->u.read.cancelled = TRUE;
++        command->u.read.deferred = FALSE;
++        IUnknown_Release(&command->IUnknown_iface);
++    }
++}
+ 
+ static ULONG source_reader_addref(struct source_reader *reader)
+ {
+@@ -212,6 +241,8 @@ static ULONG source_reader_addref(struct source_reader *reader)
+ 
+ static void transform_entry_destroy(struct transform_entry *entry)
+ {
++    if (entry->pending_input)
++        IMFSample_Release(entry->pending_input);
+     IMFTransform_Release(entry->transform);
+     free(entry);
+ }
+@@ -220,6 +251,8 @@ static void media_stream_destroy(struct media_stream *stream)
+ {
+     struct transform_entry *entry, *next;
+ 
++    media_stream_cancel_deferred(stream);
++
+     LIST_FOR_EACH_ENTRY_SAFE(entry, next, &stream->transforms, struct transform_entry, entry)
+     {
+         list_remove(&entry->entry);
+@@ -290,7 +323,7 @@ static ULONG WINAPI source_reader_async_command_AddRef(IUnknown *iface)
+ static ULONG WINAPI source_reader_async_command_Release(IUnknown *iface)
+ {
+     struct source_reader_async_command *command = impl_from_async_command_IUnknown(iface);
+-    ULONG refcount = InterlockedIncrement(&command->refcount);
++    ULONG refcount = InterlockedDecrement(&command->refcount);
+ 
+     if (!refcount)
+     {
+@@ -317,6 +350,7 @@ static HRESULT source_reader_create_async_op(enum source_reader_async_op op, str
+         return E_OUTOFMEMORY;
+ 
+     command->IUnknown_iface.lpVtbl = &source_reader_async_command_vtbl;
++    command->refcount = 1;
+     command->op = op;
+ 
+     *ret = command;
+@@ -404,29 +438,77 @@ static HRESULT WINAPI source_reader_callback_GetParameters(IMFAsyncCallback *ifa
+     return E_NOTIMPL;
+ }
+ 
+-static void source_reader_response_ready(struct source_reader *reader, struct stream_response *response)
++static BOOL media_stream_has_reserved_response(struct source_reader *reader, struct media_stream *stream)
++{
++    struct stream_response *response;
++
++    LIST_FOR_EACH_ENTRY(response, &reader->responses, struct stream_response, entry)
++        if (response->stream_index == stream->index && response->reserved) return TRUE;
++    return FALSE;
++}
++
++/* The queue can execute multiple workers concurrently. Reserve responses for
++ * requests before posting work, but schedule only this stream's head callback.
++ * A later READ must neither steal that sample nor overtake its callback. */
++static void source_reader_schedule_response(struct source_reader *reader, struct media_stream *stream)
+ {
+     struct source_reader_async_command *command;
+-    struct media_stream *stream = &reader->streams[response->stream_index];
++    struct stream_response *response;
+     HRESULT hr;
+ 
+-    if (!stream->requests)
+-        return;
++    if (stream->callback_active || stream->drain_read) return;
+ 
+-    if (reader->async_callback)
++    LIST_FOR_EACH_ENTRY(response, &reader->responses, struct stream_response, entry)
+     {
++        if (response->stream_index != stream->index) continue;
++        if (!response->reserved && stream->requests)
++        {
++            response->reserved = TRUE;
++            stream->requests--;
++        }
++        if (!response->reserved || response->scheduled) return;
+         if (SUCCEEDED(source_reader_create_async_op(SOURCE_READER_ASYNC_SAMPLE_READY, &command)))
+         {
+             command->u.sample.stream_index = stream->index;
++            command->u.sample.response_id = response->id;
+             if (FAILED(hr = MFPutWorkItem(reader->queue, &reader->async_commands_callback, &command->IUnknown_iface)))
+                 WARN("Failed to submit async result, hr %#lx.\n", hr);
++            else response->scheduled = TRUE;
+             IUnknown_Release(&command->IUnknown_iface);
+         }
++        return;
+     }
+-    else
+-        WakeAllConditionVariable(&reader->sample_event);
++}
++
++static void source_reader_response_ready(struct source_reader *reader, struct stream_response *response)
++{
++    struct media_stream *stream = &reader->streams[response->stream_index];
+ 
++    if (!stream->requests || stream->drain_read) return;
+     stream->requests--;
++    if (reader->async_callback)
++    {
++        response->reserved = TRUE;
++        source_reader_schedule_response(reader, stream);
++    }
++    else WakeAllConditionVariable(&reader->sample_event);
++}
++
++static void source_reader_retry_deferred(struct source_reader *reader, struct media_stream *stream)
++{
++    struct source_reader_async_command *command;
++    struct list *head;
++    HRESULT hr;
++
++    if (stream->callback_active || stream->requests || media_stream_has_reserved_response(reader, stream)
++            || (reader->flags & (SOURCE_READER_FLUSHING | SOURCE_READER_SEEKING))
++            || !(head = list_head(&stream->deferred_reads))) return;
++
++    command = LIST_ENTRY(head, struct source_reader_async_command, entry);
++    if (command->u.read.retry_queued) return;
++    if (FAILED(hr = MFPutWorkItem(reader->queue, &reader->async_commands_callback, &command->IUnknown_iface)))
++        WARN("Failed to retry deferred read, hr %#lx.\n", hr);
++    else command->u.read.retry_queued = TRUE;
+ }
+ 
+ static void source_reader_copy_sample_buffer(IMFSample *src, IMFSample *dst)
+@@ -475,6 +557,7 @@ static HRESULT source_reader_queue_response(struct source_reader *reader, struct
+     response->stream_flags = stream_flags;
+     response->timestamp = timestamp;
+     response->sample = sample;
++    response->id = ++reader->next_response_id;
+     if (response->sample)
+         IMFSample_AddRef(response->sample);
+ 
+@@ -503,6 +586,13 @@ static HRESULT source_reader_request_sample(struct source_reader *reader, struct
+ {
+     HRESULT hr = S_OK;
+ 
++    if (reader->async_callback) source_reader_schedule_response(reader, stream);
++    if (stream->callback_active) return S_OK;
++    if (!stream->stream || stream->responses)
++        return S_OK;
++    if ((hr = source_reader_resume_transforms(reader, stream)) != S_FALSE)
++        return hr;
++
+     if (stream->stream && !(stream->flags & STREAM_FLAG_SAMPLE_REQUESTED))
+     {
+         if (FAILED(hr = IMFMediaStream_RequestSample(stream->stream, NULL)))
+@@ -574,6 +664,9 @@ static HRESULT source_reader_new_stream_handler(struct source_reader *reader, IM
+ 
+ static HRESULT source_reader_source_state_handler(struct source_reader *reader, MediaEventType event_type)
+ {
++    HRESULT hr = S_OK;
++    unsigned int i;
++
+     EnterCriticalSection(&reader->cs);
+ 
+     switch (event_type)
+@@ -587,19 +680,36 @@ static HRESULT source_reader_source_state_handler(struct source_reader *reader,
+             reader->flags &= ~SOURCE_READER_SEEKING;
+             break;
+         case MESourceSeeked:
++            reader->source_state = SOURCE_STATE_STARTED;
+             reader->flags &= ~SOURCE_READER_SEEKING;
+             break;
+         default:
+             WARN("Unhandled event %ld.\n", event_type);
+     }
+ 
++    /* Stream selection may have changed while Start was pending. Reconcile it
++     * now, so a read of a newly selected stream need not wait for another read
++     * to start that stream. */
++    if ((event_type == MESourceStarted || event_type == MESourceSeeked)
++            && FAILED(hr = source_reader_start_source(reader)))
++    {
++        for (i = 0; i < reader->stream_count; ++i)
++            while (reader->streams[i].requests)
++                if (FAILED(source_reader_queue_response(reader, &reader->streams[i], hr, MF_SOURCE_READERF_ERROR, 0, NULL)))
++                    break;
++    }
++
++    if (reader->async_callback && reader->public_refcount)
++        for (i = 0; i < reader->stream_count; ++i)
++            source_reader_retry_deferred(reader, &reader->streams[i]);
++
+     LeaveCriticalSection(&reader->cs);
+ 
+     WakeAllConditionVariable(&reader->state_event);
+     if (event_type == MESourceStopped)
+         WakeAllConditionVariable(&reader->stop_event);
+ 
+-    return S_OK;
++    return hr;
+ }
+ 
+ static HRESULT WINAPI source_reader_source_events_callback_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
+@@ -758,19 +868,13 @@ static HRESULT source_reader_pull_transform_samples(struct source_reader *reader
+ static HRESULT source_reader_push_transform_samples(struct source_reader *reader, struct media_stream *stream,
+         struct transform_entry *entry, IMFSample *sample)
+ {
+-    HRESULT hr;
+-
+-    do
+-    {
+-        if (FAILED(hr = source_reader_pull_transform_samples(reader, stream, entry))
+-                && hr != MF_E_TRANSFORM_NEED_MORE_INPUT)
+-            return hr;
+-        if (SUCCEEDED(hr = IMFTransform_ProcessInput(entry->transform, 0, sample, 0)))
+-            return source_reader_pull_transform_samples(reader, stream, entry);
+-    }
+-    while (hr == MF_E_NOTACCEPTING);
+-
+-    return hr;
++    /* A pending output can fulfill the current read before this input is
++     * accepted. Retain it until another read resumes the serialized pipeline. */
++    if (entry->pending_input)
++        return MF_E_NOTACCEPTING;
++    entry->pending_input = sample;
++    IMFSample_AddRef(sample);
++    return source_reader_pull_transform_samples(reader, stream, entry);
+ }
+ 
+ /* update the transform output type while keeping subtype which matches the desired type */
+@@ -871,6 +975,16 @@ static HRESULT source_reader_pull_transform_samples(struct source_reader *reader
+     if ((ptr = list_next(&stream->transforms, &entry->entry)))
+         next = LIST_ENTRY(ptr, struct transform_entry, entry);
+ 
++    /* Consume downstream output first. Never retain a decoder's entire surface
++     * pool while holding the lock needed by its consumer to release samples. */
++    if (next && FAILED(hr = source_reader_pull_transform_samples(reader, stream, next))
++            && hr != MF_E_TRANSFORM_NEED_MORE_INPUT)
++        return hr;
++    if (stream->responses || (!stream->requests && !stream->drain_read))
++        return S_OK;
++    if (entry->drained)
++        return MF_E_TRANSFORM_NEED_MORE_INPUT;
++
+     if (!entry->attributes_initialized)
+     {
+         transform_entry_initialize_attributes(reader, entry);
+@@ -881,11 +995,19 @@ static HRESULT source_reader_pull_transform_samples(struct source_reader *reader
+         return hr;
+     stream_info.cbSize = max(stream_info.cbSize, entry->min_buffer_size);
+ 
+-    while (SUCCEEDED(hr))
++    while (!stream->responses && (stream->requests || stream->drain_read))
+     {
+         MFT_OUTPUT_DATA_BUFFER out_buffer = {0};
+         IMFMediaType *media_type;
+ 
++        if (entry->draining && !entry->drain_sent && (!entry->pending_input
++                || (stream->drain_read && &entry->entry == list_head(&stream->transforms))))
++        {
++            if (FAILED(hr = IMFTransform_ProcessMessage(entry->transform, MFT_MESSAGE_COMMAND_DRAIN, 0)))
++                return hr;
++            entry->drain_sent = TRUE;
++        }
++
+         if (!(stream_info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES))
+                 && FAILED(hr = source_reader_allocate_stream_sample(&stream_info, &out_buffer.pSample)))
+             break;
+@@ -906,7 +1028,13 @@ static HRESULT source_reader_pull_transform_samples(struct source_reader *reader
+             if (FAILED(hr))
+                 source_reader_queue_response(reader, stream, hr, MF_SOURCE_READERF_ERROR, 0, NULL);
+             else if (next)
++            {
+                 hr = source_reader_push_transform_samples(reader, stream, next, out_buffer.pSample);
++                /* Downstream buffering is not a request for new input by this
++                 * transform. Continue pulling its already available output. */
++                if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
++                    hr = S_OK;
++            }
+             else
+                 hr = source_reader_queue_sample(reader, stream, entry->pending_flags, out_buffer.pSample);
+ 
+@@ -929,6 +1057,32 @@ static HRESULT source_reader_pull_transform_samples(struct source_reader *reader
+             IMFSample_Release(out_buffer.pSample);
+         if (out_buffer.pEvents)
+             IMFCollection_Release(out_buffer.pEvents);
++
++        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT && entry->drain_sent)
++        {
++            entry->drained = TRUE;
++            if (next)
++            {
++                next->draining = TRUE;
++                return source_reader_pull_transform_samples(reader, stream, next);
++            }
++            if (stream->state == STREAM_STATE_DRAINING)
++                stream->state = STREAM_STATE_EOS;
++            break;
++        }
++        else if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT && entry->pending_input
++                && (!stream->drain_read || &entry->entry != list_head(&stream->transforms)))
++        {
++            if (entry->discontinuity)
++                IMFSample_SetUINT32(entry->pending_input, &MFSampleExtension_Discontinuity, TRUE);
++            if (FAILED(hr = IMFTransform_ProcessInput(entry->transform, 0, entry->pending_input, 0)))
++                return hr;
++            entry->discontinuity = FALSE;
++            IMFSample_Release(entry->pending_input);
++            entry->pending_input = NULL;
++        }
++        else if (FAILED(hr))
++            break;
+     }
+ 
+     return hr;
+@@ -937,20 +1091,46 @@ static HRESULT source_reader_pull_transform_samples(struct source_reader *reader
+ static HRESULT source_reader_drain_transform_samples(struct source_reader *reader, struct media_stream *stream,
+         struct transform_entry *entry)
+ {
+-    struct transform_entry *next = NULL;
+-    struct list *ptr;
+-    HRESULT hr;
++    entry->draining = TRUE;
++    return source_reader_resume_transforms(reader, stream);
++}
+ 
+-    if ((ptr = list_next(&stream->transforms, &entry->entry)))
+-        next = LIST_ENTRY(ptr, struct transform_entry, entry);
++static HRESULT source_reader_resume_transforms(struct source_reader *reader, struct media_stream *stream)
++{
++    struct list *ptr = list_head(&stream->transforms);
++    struct transform_entry *entry;
++    HRESULT hr;
+ 
+-    if (FAILED(hr = IMFTransform_ProcessMessage(entry->transform, MFT_MESSAGE_COMMAND_DRAIN, 0)))
+-        WARN("Failed to drain transform %p, hr %#lx\n", entry->transform, hr);
+-    if (FAILED(hr = source_reader_pull_transform_samples(reader, stream, entry))
+-            && hr != MF_E_TRANSFORM_NEED_MORE_INPUT)
+-        WARN("Failed to pull pending samples, hr %#lx.\n", hr);
++retry:
++    if (ptr && stream->state == STREAM_STATE_READY
++            && LIST_ENTRY(list_tail(&stream->transforms), struct transform_entry, entry)->drained)
++    {
++        LIST_FOR_EACH_ENTRY(entry, &stream->transforms, struct transform_entry, entry)
++        {
++            entry->draining = entry->drain_sent = entry->drained = FALSE;
++            entry->discontinuity = TRUE;
++        }
++    }
+ 
+-    return next ? source_reader_drain_transform_samples(reader, stream, next) : S_OK;
++    if (ptr && stream->requests && !stream->responses)
++    {
++        hr = source_reader_pull_transform_samples(reader, stream, LIST_ENTRY(ptr, struct transform_entry, entry));
++        if (FAILED(hr) && hr != MF_E_TRANSFORM_NEED_MORE_INPUT)
++        {
++            source_reader_queue_response(reader, stream, hr, MF_SOURCE_READERF_ERROR, 0, NULL);
++            return hr;
++        }
++        if (stream->state == STREAM_STATE_READY
++                && LIST_ENTRY(list_tail(&stream->transforms), struct transform_entry, entry)->drained)
++            goto retry;
++    }
++    if (stream->state == STREAM_STATE_EOS)
++    {
++        while (stream->requests)
++            source_reader_queue_response(reader, stream, S_OK, MF_SOURCE_READERF_ENDOFSTREAM, 0, NULL);
++        return S_OK;
++    }
++    return stream->responses || stream->state == STREAM_STATE_DRAINING ? S_OK : S_FALSE;
+ }
+ 
+ static HRESULT source_reader_flush_transform_samples(struct source_reader *reader, struct media_stream *stream,
+@@ -966,6 +1146,13 @@ static HRESULT source_reader_flush_transform_samples(struct source_reader *reade
+     if (FAILED(hr = IMFTransform_ProcessMessage(entry->transform, MFT_MESSAGE_COMMAND_FLUSH, 0)))
+         WARN("Failed to flush transform %p, hr %#lx\n", entry->transform, hr);
+ 
++    if (entry->pending_input)
++    {
++        IMFSample_Release(entry->pending_input);
++        entry->pending_input = NULL;
++    }
++    entry->draining = entry->drain_sent = entry->drained = entry->discontinuity = FALSE;
++
+     return next ? source_reader_flush_transform_samples(reader, stream, next) : S_OK;
+ }
+ 
+@@ -1082,7 +1269,7 @@ static HRESULT source_reader_media_stream_state_handler(struct source_reader *re
+             switch (event_type)
+             {
+                 case MEEndOfStream:
+-                    stream->state = STREAM_STATE_EOS;
++                    stream->state = STREAM_STATE_DRAINING;
+                     stream->flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
+ 
+                     if ((ptr = list_head(&stream->transforms)))
+@@ -1092,13 +1279,17 @@ static HRESULT source_reader_media_stream_state_handler(struct source_reader *re
+                             WARN("Failed to drain pending samples, hr %#lx.\n", hr);
+                     }
+ 
+-                    while (stream->requests)
+-                        source_reader_queue_response(reader, stream, S_OK, MF_SOURCE_READERF_ENDOFSTREAM, 0, NULL);
++                    else
++                    {
++                        stream->state = STREAM_STATE_EOS;
++                        source_reader_resume_transforms(reader, stream);
++                    }
+ 
+                     break;
+                 case MEStreamSeeked:
+                 case MEStreamStarted:
+                     stream->state = STREAM_STATE_READY;
++                    stream->flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
+ 
+                     if ((ptr = list_head(&stream->transforms)))
+                     {
+@@ -1218,7 +1409,8 @@ static struct stream_response * media_stream_detach_response(struct source_reade
+     return response;
+ }
+ 
+-static struct stream_response *media_stream_pop_response(struct source_reader *reader, struct media_stream *stream)
++static struct stream_response *media_stream_pop_response(struct source_reader *reader, struct media_stream *stream,
++        UINT64 response_id)
+ {
+     struct stream_response *response;
+     IMFSample *sample;
+@@ -1228,6 +1420,8 @@ static struct stream_response *media_stream_pop_response(struct source_reader *r
+     {
+         if (stream && response->stream_index != stream->index)
+             continue;
++        if (response_id && response->id != response_id) continue;
++        if (!response_id && response->reserved) return NULL;
+ 
+         if (!stream) stream = &reader->streams[response->stream_index];
+ 
+@@ -1242,10 +1436,14 @@ static struct stream_response *media_stream_pop_response(struct source_reader *r
+             }
+             else
+             {
++                /* This request receives the allocation error. Keep the sample
++                 * available for another request, not owned by a spent command. */
++                response->reserved = response->scheduled = FALSE;
+                 if (!(response = calloc(1, sizeof(*response))))
+                     return NULL;
+ 
+                 response->status = hr;
++                response->stream_index = stream->index;
+                 response->stream_flags = MF_SOURCE_READERF_ERROR;
+                 return response;
+             }
+@@ -1282,6 +1480,12 @@ static HRESULT source_reader_start_source(struct source_reader *reader)
+     HRESULT hr = S_OK;
+     unsigned int i;
+ 
++    /* Start is asynchronous. More queued ReadSample requests must not restart
++     * the source before its first MESourceStarted acknowledgement, otherwise
++     * the resulting seeks discard the samples requested by earlier reads. */
++    if (reader->source_state == SOURCE_STATE_STARTING)
++        return S_OK;
++
+     for (i = 0; i < reader->stream_count; ++i)
+     {
+         source_reader_get_stream_selection(reader, i, &selected);
+@@ -1310,10 +1514,13 @@ static HRESULT source_reader_start_source(struct source_reader *reader)
+         /* Update cached stream selection if descriptor was accepted. */
+         if (SUCCEEDED(hr = IMFMediaSource_Start(reader->source, reader->descriptor, &GUID_NULL, &position)))
+         {
++            reader->source_state = SOURCE_STATE_STARTING;
+             for (i = 0; i < reader->stream_count; ++i)
+             {
+                 if (reader->streams[i].flags & STREAM_FLAG_SELECTED)
+                     reader->streams[i].flags |= STREAM_FLAG_PRESENTED;
++                else
++                    reader->streams[i].flags &= ~STREAM_FLAG_PRESENTED;
+             }
+         }
+     }
+@@ -1338,9 +1545,22 @@ static BOOL source_reader_get_read_result(struct source_reader *reader, struct m
+         HRESULT *status, DWORD *stream_index, DWORD *stream_flags, LONGLONG *timestamp, IMFSample **sample)
+ {
+     struct stream_response *response = NULL;
++    struct list *ptr;
+     BOOL request_sample = FALSE;
+ 
+-    if ((response = media_stream_pop_response(reader, stream)))
++    if ((flags & MF_SOURCE_READER_CONTROLF_DRAIN) && !stream->responses
++            && (ptr = list_head(&stream->transforms)))
++    {
++        HRESULT hr;
++        stream->drain_read = TRUE;
++        LIST_ENTRY(ptr, struct transform_entry, entry)->draining = TRUE;
++        hr = source_reader_pull_transform_samples(reader, stream, LIST_ENTRY(ptr, struct transform_entry, entry));
++        if (FAILED(hr) && hr != MF_E_TRANSFORM_NEED_MORE_INPUT)
++            source_reader_queue_response(reader, stream, hr, MF_SOURCE_READERF_ERROR, 0, NULL);
++        stream->drain_read = FALSE;
++    }
++
++    if ((response = media_stream_pop_response(reader, stream, 0)))
+     {
+         *status = response->status;
+         *stream_index = stream->index;
+@@ -1459,6 +1679,7 @@ static void source_reader_flush_stream(struct source_reader *reader, DWORD strea
+     HRESULT hr;
+ 
+     source_reader_release_responses(reader, stream);
++    media_stream_cancel_deferred(stream);
+ 
+     if ((ptr = list_head(&stream->transforms)))
+     {
+@@ -1468,6 +1689,8 @@ static void source_reader_flush_stream(struct source_reader *reader, DWORD strea
+     }
+ 
+     stream->requests = 0;
++    if (stream->state == STREAM_STATE_DRAINING)
++        stream->state = STREAM_STATE_EOS;
+ }
+ 
+ static HRESULT source_reader_flush(struct source_reader *reader, unsigned int index)
+@@ -1506,10 +1729,11 @@ static HRESULT source_reader_flush(struct source_reader *reader, unsigned int in
+ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
+ {
+     struct source_reader *reader = impl_from_async_commands_callback_IMFAsyncCallback(iface);
+-    struct media_stream *stream, stub_stream = { .requests = 1 };
++    struct media_stream *stream = NULL, stub_stream = { .requests = 1 };
+     struct source_reader_async_command *command;
+     struct stream_response *response;
+     DWORD stream_index, stream_flags;
++    unsigned int i;
+     BOOL report_sample = FALSE;
+     IMFSample *sample = NULL;
+     LONGLONG timestamp = 0;
+@@ -1526,12 +1750,38 @@ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallb
+         case SOURCE_READER_ASYNC_READ:
+             EnterCriticalSection(&reader->cs);
+ 
+-            if (SUCCEEDED(hr = source_reader_start_source(reader)))
++            if (command->u.read.deferred) command->u.read.retry_queued = FALSE;
++            if (!command->u.read.cancelled && SUCCEEDED(hr = source_reader_start_source(reader)))
+             {
+                 if (SUCCEEDED(hr = source_reader_get_stream_read_index(reader, command->u.read.stream_index, &stream_index)))
+                 {
+                     stream = &reader->streams[stream_index];
+ 
++                    if (stream->callback_active || stream->requests || (reader->flags & SOURCE_READER_SEEKING)
++                            || media_stream_has_reserved_response(reader, stream)
++                            || (!list_empty(&stream->deferred_reads)
++                                && list_head(&stream->deferred_reads) != &command->entry))
++                    {
++                        if (!command->u.read.deferred)
++                        {
++                            command->u.read.stream_index = stream_index;
++                            command->u.read.deferred = TRUE;
++                            /* The work item releases its state after Invoke.
++                             * Keep this exact request, including DRAIN flags. */
++                            IUnknown_AddRef(&command->IUnknown_iface);
++                            list_add_tail(&stream->deferred_reads, &command->entry);
++                        }
++                        source_reader_schedule_response(reader, stream);
++                        source_reader_retry_deferred(reader, stream);
++                        goto async_read_done;
++                    }
++                    if (command->u.read.deferred)
++                    {
++                        list_remove(&command->entry);
++                        command->u.read.deferred = FALSE;
++                        IUnknown_Release(&command->IUnknown_iface);
++                    }
++
+                     if (!(report_sample = source_reader_get_read_result(reader, stream, command->u.read.flags, &status,
+                             &stream_index, &stream_flags, &timestamp, &sample)))
+                     {
+@@ -1539,14 +1789,32 @@ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallb
+                         source_reader_request_sample(reader, stream);
+                         /* FIXME: set error stream/reader state on request failure */
+                     }
++                    else stream->callback_active = TRUE;
+                 }
+-                else
++                else if (!command->u.read.deferred)
+                 {
+                     stub_stream.index = command->u.read.stream_index;
+                     source_reader_queue_response(reader, &stub_stream, hr, MF_SOURCE_READERF_ERROR, 0, NULL);
+                 }
+             }
+ 
++            /* A deferred stream may have been deselected, or restarting the
++             * source may fail. Complete this request instead of retaining a
++             * head command that can never be retried. Its index is normalized. */
++            if (!command->u.read.cancelled && FAILED(hr) && command->u.read.deferred)
++            {
++                stream = &reader->streams[command->u.read.stream_index];
++                list_remove(&command->entry);
++                command->u.read.deferred = FALSE;
++                IUnknown_Release(&command->IUnknown_iface);
++                status = hr;
++                stream_index = stream->index;
++                stream_flags = MF_SOURCE_READERF_ERROR;
++                report_sample = TRUE;
++                stream->callback_active = TRUE;
++            }
++
++async_read_done:
+             LeaveCriticalSection(&reader->cs);
+ 
+             if (report_sample)
+@@ -1556,15 +1824,26 @@ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallb
+             if (sample)
+                 IMFSample_Release(sample);
+ 
++            if (report_sample && stream)
++            {
++                EnterCriticalSection(&reader->cs);
++                stream->callback_active = FALSE;
++                if (reader->public_refcount) source_reader_retry_deferred(reader, stream);
++                LeaveCriticalSection(&reader->cs);
++            }
++
+             break;
+ 
+         case SOURCE_READER_ASYNC_SEEK:
+ 
+             EnterCriticalSection(&reader->cs);
+-            if (SUCCEEDED(IMFMediaSource_Start(reader->source, reader->descriptor, &command->u.seek.format,
++            if (FAILED(IMFMediaSource_Start(reader->source, reader->descriptor, &command->u.seek.format,
+                     &command->u.seek.position)))
+             {
+-                reader->flags |= SOURCE_READER_SEEKING;
++                reader->flags &= ~SOURCE_READER_SEEKING;
++                for (i = 0; i < reader->stream_count; ++i)
++                    source_reader_retry_deferred(reader, &reader->streams[i]);
++                WakeAllConditionVariable(&reader->state_event);
+             }
+             LeaveCriticalSection(&reader->cs);
+ 
+@@ -1574,7 +1853,8 @@ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallb
+ 
+             EnterCriticalSection(&reader->cs);
+             stream = &reader->streams[command->u.sample.stream_index];
+-            response = media_stream_pop_response(reader, stream);
++            response = media_stream_pop_response(reader, stream, command->u.sample.response_id);
++            if (response) stream->callback_active = TRUE;
+             LeaveCriticalSection(&reader->cs);
+ 
+             if (response)
+@@ -1584,6 +1864,17 @@ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallb
+                 source_reader_release_response(response);
+             }
+ 
++            EnterCriticalSection(&reader->cs);
++            if (response) stream->callback_active = FALSE;
++            if (reader->public_refcount && !(reader->flags & (SOURCE_READER_FLUSHING | SOURCE_READER_SEEKING))
++                    && !stream->callback_active)
++            {
++                source_reader_schedule_response(reader, stream);
++                if (stream->requests) source_reader_request_sample(reader, stream);
++                source_reader_retry_deferred(reader, stream);
++            }
++            LeaveCriticalSection(&reader->cs);
++
+             break;
+         case SOURCE_READER_ASYNC_FLUSH:
+             EnterCriticalSection(&reader->cs);
+@@ -2348,7 +2639,8 @@ static HRESULT WINAPI src_reader_SetCurrentPosition(IMFSourceReaderEx *iface, RE
+     /* Check if we got pending requests. */
+     for (i = 0; i < reader->stream_count; ++i)
+     {
+-        if (reader->streams[i].requests)
++        if (reader->streams[i].requests || !list_empty(&reader->streams[i].deferred_reads)
++                || media_stream_has_reserved_response(reader, &reader->streams[i]))
+         {
+             hr = MF_E_INVALIDREQUEST;
+             break;
+@@ -2362,6 +2654,13 @@ static HRESULT WINAPI src_reader_SetCurrentPosition(IMFSourceReaderEx *iface, RE
+             reader->streams[i].last_sample_ts = 0;
+         }
+ 
++        for (i = 0; i < reader->stream_count; ++i)
++        {
++            source_reader_flush_stream(reader, i);
++            reader->streams[i].state = STREAM_STATE_READY;
++            reader->streams[i].flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
++        }
++
+         if (reader->async_callback)
+         {
+             if (SUCCEEDED(hr = source_reader_create_async_op(SOURCE_READER_ASYNC_SEEK, &command)))
+@@ -2369,20 +2668,28 @@ static HRESULT WINAPI src_reader_SetCurrentPosition(IMFSourceReaderEx *iface, RE
+                 command->u.seek.format = *format;
+                 PropVariantCopy(&command->u.seek.position, position);
+ 
++                reader->flags |= SOURCE_READER_SEEKING;
+                 hr = MFPutWorkItem(reader->queue, &reader->async_commands_callback, &command->IUnknown_iface);
++                if (FAILED(hr))
++                {
++                    reader->flags &= ~SOURCE_READER_SEEKING;
++                    WakeAllConditionVariable(&reader->state_event);
++                }
+                 IUnknown_Release(&command->IUnknown_iface);
+             }
+         }
+         else
+         {
+-            if (SUCCEEDED(IMFMediaSource_Start(reader->source, reader->descriptor, format, position)))
++            reader->flags |= SOURCE_READER_SEEKING;
++            if (SUCCEEDED(hr = IMFMediaSource_Start(reader->source, reader->descriptor, format, position)))
+             {
+-                reader->flags |= SOURCE_READER_SEEKING;
+                 while (reader->flags & SOURCE_READER_SEEKING)
+                 {
+                     SleepConditionVariableCS(&reader->state_event, &reader->cs, INFINITE);
+                 }
+             }
++            else
++                reader->flags &= ~SOURCE_READER_SEEKING;
+         }
+     }
+ 
+@@ -2427,6 +2734,8 @@ static HRESULT source_reader_read_sample(struct source_reader *reader, DWORD ind
+                     stream->requests++;
+                     if (FAILED(hr = source_reader_request_sample(reader, stream)))
+                         WARN("Failed to request a sample, hr %#lx.\n", hr);
++                    if (source_reader_got_response_for_stream(reader, stream) || stream->state == STREAM_STATE_EOS)
++                        break;
+                     if (stream->stream && !(stream->flags & STREAM_FLAG_SAMPLE_REQUESTED))
+                     {
+                         *stream_flags = MF_SOURCE_READERF_ERROR;
+@@ -2838,6 +3147,13 @@ static HRESULT create_source_reader_from_source(IMFMediaSource *source, IMFAttri
+         goto failed;
+     }
+ 
++    /* Destruction also visits streams whose type initialization failed. */
++    for (i = 0; i < object->stream_count; ++i)
++    {
++        list_init(&object->streams[i].transforms);
++        list_init(&object->streams[i].deferred_reads);
++    }
++
+     /* Set initial current media types. */
+     for (i = 0; i < object->stream_count; ++i)
+     {
+@@ -2846,8 +3162,6 @@ static HRESULT create_source_reader_from_source(IMFMediaSource *source, IMFAttri
+         IMFMediaType *src_type;
+         BOOL selected;
+ 
+-        list_init(&object->streams[i].transforms);
+-
+         if (FAILED(hr = MFCreateMediaType(&object->streams[i].current)))
+             break;
+ 
+diff --git a/dlls/wined3d/context_gl.c b/dlls/wined3d/context_gl.c
+index fc480f5a440880487d9cc2bfbbdd561bde7b42b9..6a11d6104009e943e5abdaafd3d2892c0f87a117 100644
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -1353,12 +1353,24 @@ static void wined3d_context_gl_cleanup(struct wined3d_context_gl *context_gl)
+          * destroyed context, acquiring a context in order to submit a fence
+          * is problematic. In particular, we'd end up back here again in the
+          * process of switching to the newly acquired context.
++         * Native synchronous contexts are also absent from TLS after release.
++         * Reacquiring here, after removal from the device's context list, would
++         * create a replacement context during destruction. Finish this
++         * context's commands directly instead.
+          *
+          * If fences aren't supported there should be nothing to wait for
+          * anyway, so just do nothing in that case. */
+-        if (context_gl->c.destroyed)
++        if (context_gl->c.destroyed || context_gl->release_on_exit)
+         {
+             gl_info->gl_ops.gl.p_glFinish();
++            if (context_gl->release_on_exit)
++            {
++                /* These fences are owned internally, unlike query fences in
++                 * context_gl->fences. Return their GL objects to the free list
++                 * before deleting that list below, without reacquiring. */
++                while (context_gl->submitted.fence_count)
++                    wined3d_fence_destroy(context_gl->submitted.fences[--context_gl->submitted.fence_count].fence);
++            }
+         }
+         else if (context_gl->c.d3d_info->fences)
+         {
+@@ -1599,6 +1611,18 @@ void wined3d_context_gl_release(struct wined3d_context_gl *context_gl)
+             context_gl->restore_ctx = NULL;
+             context_gl->restore_dc = NULL;
+         }
++        else if (context_gl->release_on_exit && !context_gl->c.destroy_delayed
++                && !context_gl->c.destroyed && context_gl == wined3d_context_gl_get_current()
++                && wglGetCurrentContext() == context_gl->gl_ctx)
++        {
++            /* Native WGL implementations may reject creating a shared context
++             * while its share source is current on another thread. Without a
++             * CS thread, the next command can arrive on a different application
++             * thread. Flush and clear both native and Wine current-context
++             * state at the outermost release so that thread can share objects.
++             * Keep a foreign application's restored context untouched. */
++            wined3d_context_gl_set_current(NULL);
++        }
+ 
+         if (context_gl->c.destroy_delayed)
+         {
+@@ -1993,6 +2017,8 @@ HRESULT wined3d_context_gl_init(struct wined3d_context_gl *context_gl, struct wi
+     gl_info = &wined3d_adapter_gl(device->adapter)->gl_info;
+     context_gl->gl_info = gl_info;
+     d3d_info = context->d3d_info;
++    context_gl->release_on_exit = !device->cs->thread
++            && !GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version");
+ 
+     context_gl->tid = GetCurrentThreadId();
+     context_gl->window = context->swapchain->win_handle;
+diff --git a/dlls/wined3d/swapchain.c b/dlls/wined3d/swapchain.c
+index 0e3cc466d92b309d642347dc3ccdd6dcaf618c55..051a0b8130df29f5a5a699213e2177d22c2e4311 100644
+--- a/dlls/wined3d/swapchain.c
++++ b/dlls/wined3d/swapchain.c
+@@ -128,6 +128,11 @@ static void wined3d_swapchain_vk_destroy_vulkan_swapchain(struct wined3d_swapcha
+     free(swapchain_vk->vk_semaphores);
+     VK_CALL(vkDestroySwapchainKHR(device_vk->vk_device, swapchain_vk->vk_swapchain, NULL));
+     VK_CALL(vkDestroySurfaceKHR(vk_info->instance, swapchain_vk->vk_surface, NULL));
++    swapchain_vk->vk_images = NULL;
++    swapchain_vk->vk_semaphores = NULL;
++    swapchain_vk->image_count = swapchain_vk->current = 0;
++    swapchain_vk->vk_swapchain = VK_NULL_HANDLE;
++    swapchain_vk->vk_surface = VK_NULL_HANDLE;
+ }
+ 
+ static void wined3d_swapchain_vk_destroy_object(void *object)
+@@ -847,6 +852,7 @@ static bool wined3d_swapchain_vk_create_vulkan_swapchain_images(struct wined3d_s
+     {
+         ERR("Failed to get swapchain images, vr %s.\n", wined3d_debug_vkresult(vr));
+         free(swapchain_vk->vk_images);
++        swapchain_vk->vk_images = NULL;
+         return false;
+     }
+ 
+@@ -854,6 +860,7 @@ static bool wined3d_swapchain_vk_create_vulkan_swapchain_images(struct wined3d_s
+     {
+         ERR("Failed to allocate semaphores array.\n");
+         free(swapchain_vk->vk_images);
++        swapchain_vk->vk_images = NULL;
+         return false;
+     }
+ 
+@@ -890,9 +897,24 @@ fail:
+     }
+     free(swapchain_vk->vk_semaphores);
+     free(swapchain_vk->vk_images);
++    swapchain_vk->vk_semaphores = NULL;
++    swapchain_vk->vk_images = NULL;
+     return false;
+ }
+ 
++static bool wined3d_swapchain_vk_defer_native_window(const struct wined3d_swapchain_vk *swapchain_vk)
++{
++    RECT rect;
++
++    /* Win32 WSI cannot create images for an empty surface. D3D back buffers are
++     * independent of those images and must remain usable while presentation is
++     * suspended. Wine's Unix drivers already provide their own backing surface. */
++    if (GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version"))
++        return false;
++    return IsIconic(swapchain_vk->s.win_handle)
++            || (GetClientRect(swapchain_vk->s.win_handle, &rect) && IsRectEmpty(&rect));
++}
++
+ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapchain_vk *swapchain_vk)
+ {
+     struct wined3d_device_vk *device_vk = wined3d_device_vk(swapchain_vk->s.device);
+@@ -915,6 +937,9 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
+     adapter_vk = wined3d_adapter_vk(device_vk->d.adapter);
+     vk_info = &adapter_vk->vk_info;
+ 
++    if (wined3d_swapchain_vk_defer_native_window(swapchain_vk))
++        return WINED3D_OK;
++
+     surface_desc.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+     surface_desc.pNext = NULL;
+     surface_desc.flags = 0;
+@@ -947,6 +972,16 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
+         goto fail;
+     }
+ 
++    /* A resize may race the initial client-rectangle check. Never submit an
++     * invalid zero extent to the native loader, or fabricate nonzero caps. */
++    if ((!surface_caps.maxImageExtent.width || !surface_caps.maxImageExtent.height)
++            && !GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version"))
++    {
++        VK_CALL(vkDestroySurfaceKHR(vk_info->instance, vk_surface, NULL));
++        swapchain_vk->vk_surface = VK_NULL_HANDLE;
++        return WINED3D_OK;
++    }
++
+     image_count = desc->backbuffer_count;
+     if (image_count < surface_caps.minImageCount)
+         image_count = surface_caps.minImageCount;
+@@ -1027,6 +1062,7 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
+     if (!wined3d_swapchain_vk_create_vulkan_swapchain_images(swapchain_vk, vk_swapchain))
+     {
+         VK_CALL(vkDestroySwapchainKHR(device_vk->vk_device, vk_swapchain, NULL));
++        swapchain_vk->vk_swapchain = VK_NULL_HANDLE;
+         goto fail;
+     }
+ 
+@@ -1092,6 +1128,10 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
+ 
+     wined3d_swapchain_vk_set_swap_interval(swapchain_vk, swap_interval);
+ 
++    /* A window can become empty while a swap-interval change recreates WSI. */
++    if (!swapchain_vk->vk_swapchain)
++        return VK_ERROR_OUT_OF_DATE_KHR;
++
+     present_idx = swapchain_vk->current++ % swapchain_vk->image_count;
+     wined3d_context_vk_wait_command_buffer(context_vk, swapchain_vk->vk_semaphores[present_idx].command_buffer_id);
+     if ((vr = VK_CALL(vkAcquireNextImageKHR(device_vk->vk_device, swapchain_vk->vk_swapchain, UINT64_MAX,
+@@ -1261,6 +1301,20 @@ static void swapchain_vk_present(struct wined3d_swapchain *swapchain, const RECT
+ 
+     context_vk = wined3d_context_vk(context_acquire(swapchain->device, back_buffer, 0));
+ 
++    if (swapchain->win_handle != GetDesktopWindow()
++            && !GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version"))
++    {
++        if (wined3d_swapchain_vk_defer_native_window(swapchain_vk))
++            goto deferred;
++        if (!swapchain_vk->vk_swapchain)
++        {
++            if (FAILED(hr = wined3d_swapchain_vk_create_vulkan_swapchain(swapchain_vk)))
++                ERR("Failed to resume native presentation, hr %#lx.\n", hr);
++            if (!swapchain_vk->vk_swapchain)
++                goto deferred;
++        }
++    }
++
+     if (!swapchain_vk->vk_swapchain || swapchain_present_is_partial_copy(swapchain, dst_rect))
+     {
+         swapchain_blit_gdi(swapchain, &context_vk->c, src_rect, dst_rect);
+@@ -1275,7 +1329,7 @@ static void swapchain_vk_present(struct wined3d_swapchain *swapchain, const RECT
+             {
+                 if (FAILED(hr = wined3d_swapchain_vk_recreate(swapchain_vk)))
+                     ERR("Failed to recreate swapchain, hr %#lx.\n", hr);
+-                else if (vr == VK_ERROR_OUT_OF_DATE_KHR && (vr = wined3d_swapchain_vk_blit(
++                else if (swapchain_vk->vk_swapchain && vr == VK_ERROR_OUT_OF_DATE_KHR && (vr = wined3d_swapchain_vk_blit(
+                         swapchain_vk, context_vk, src_rect, dst_rect, swap_interval)))
+                     ERR("Failed to blit image, vr %s.\n", wined3d_debug_vkresult(vr));
+             }
+@@ -1286,6 +1340,13 @@ static void swapchain_vk_present(struct wined3d_swapchain *swapchain, const RECT
+         }
+     }
+ 
++    goto rotate;
++
++deferred:
++    wined3d_texture_load_location(back_buffer, 0, &context_vk->c, back_buffer->resource.draw_binding);
++    wined3d_context_vk_submit_command_buffer(context_vk, 0, NULL, NULL, 0, NULL);
++
++rotate:
+     wined3d_swapchain_vk_rotate(swapchain, context_vk);
+ 
+     wined3d_texture_validate_location(swapchain->front_buffer, 0, WINED3D_LOCATION_DRAWABLE);
+diff --git a/dlls/wined3d/wined3d_gl.h b/dlls/wined3d/wined3d_gl.h
+index 00c82c7ac0a40b4411a6606ccb1f5ab90a77d642..562d2c4bc14ef1bc329eb860645f98e36b13352b 100644
+--- a/dlls/wined3d/wined3d_gl.h
++++ b/dlls/wined3d/wined3d_gl.h
+@@ -631,7 +631,8 @@ struct wined3d_context_gl
+     uint32_t needs_set : 1;
+     uint32_t internal_format_set : 1;
+     uint32_t valid : 1;
+-    uint32_t padding : 25;
++    uint32_t release_on_exit : 1;
++    uint32_t padding : 24;
+ 
+     uint32_t default_attrib_value_set;
+ 
+diff --git a/dlls/winevulkan/loader.c b/dlls/winevulkan/loader.c
+index 33a3c80e3f46446573047fd552d30ed6f37ae3f7..c3eabd5741821a0fa4fb0b068dff6786a8761874 100644
+--- a/dlls/winevulkan/loader.c
++++ b/dlls/winevulkan/loader.c
+@@ -255,7 +255,11 @@ static NTSTATUS WINAPI call_vulkan_debug_report_callback(void *args, ULONG size)
+ 
+     ret = callback(params->flags, params->object_type, params->object_handle, params->location,
+                    params->code, layer, message, user_data);
++#ifdef WINEDOWS_NATIVE_VULKAN
++    return ret;
++#else
+     return NtCallbackReturn(&ret, sizeof(ret), STATUS_SUCCESS);
++#endif
+ }
+ 
+ static NTSTATUS WINAPI call_vulkan_debug_utils_callback(void *args, ULONG size)
+@@ -333,7 +337,11 @@ static NTSTATUS WINAPI call_vulkan_debug_utils_callback(void *args, ULONG size)
+     }
+     free(labels);
+ 
++#ifdef WINEDOWS_NATIVE_VULKAN
++    return ret;
++#else
+     return NtCallbackReturn(&ret, sizeof(ret), STATUS_SUCCESS);
++#endif
+ }
+ 
+ static BOOL WINAPI wine_vk_init(INIT_ONCE *once, void *param, void **context)
+@@ -345,7 +353,11 @@ static BOOL WINAPI wine_vk_init(INIT_ONCE *once, void *param, void **context)
+         .extensions = &instance_extensions,
+     };
+ 
++#ifdef WINEDOWS_NATIVE_VULKAN
++    return !UNIX_CALL(init, &params);
++#else
+     return !__wine_init_unix_call() && !UNIX_CALL(init, &params);
++#endif
+ }
+ 
+ static BOOL  wine_vk_init_once(void)
+@@ -806,6 +818,12 @@ static const WCHAR vulkan_driversW[] = L"Software\\Khronos\\Vulkan\\Drivers";
+ 
+ HRESULT WINAPI DllRegisterServer(void)
+ {
++#ifdef WINEDOWS_NATIVE_VULKAN
++    /* This frontend itself uses the installed Windows Vulkan loader. Registering
++     * it as that loader's ICD would recurse back into the same loader, and the
++     * upstream ICD manifest advertises a broader API than this native backend. */
++    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
++#else
+     WCHAR json_path[MAX_PATH];
+     HRSRC rsrc;
+     const char *data;
+@@ -836,10 +854,14 @@ HRESULT WINAPI DllRegisterServer(void)
+         RegCloseKey(key);
+     }
+     return S_OK;
++#endif
+ }
+ 
+ HRESULT WINAPI DllUnregisterServer(void)
+ {
++#ifdef WINEDOWS_NATIVE_VULKAN
++    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
++#else
+     WCHAR json_path[MAX_PATH];
+     HKEY key;
+ 
+@@ -856,4 +878,5 @@ HRESULT WINAPI DllUnregisterServer(void)
+     }
+ 
+     return S_OK;
++#endif
+ }
+diff --git a/dlls/winevulkan/make_vulkan b/dlls/winevulkan/make_vulkan
+index 792f1d955e27e8c83546a857689954626eae6b6e..a27746d3dac9f398a411b282741059cf672185f0 100755
+--- a/dlls/winevulkan/make_vulkan
++++ b/dlls/winevulkan/make_vulkan
+@@ -2464,7 +2464,9 @@ class VkGenerator(object):
+         f.write("#pragma makedep unix\n")
+         f.write("#endif\n\n")
+ 
+-        f.write("#include \"config.h\"\n\n")
++        f.write("#ifndef WINEDOWS_NATIVE_VULKAN\n")
++        f.write("#include \"config.h\"\n")
++        f.write("#endif\n\n")
+ 
+         f.write("#include <stdlib.h>\n\n")
+ 
+diff --git a/dlls/winevulkan/vulkan.c b/dlls/winevulkan/vulkan.c
+index 0f49148ee15b55dfcdd947f3a49cef4e212074e5..9bfce9c582987609c4713c4ad3fe61137da60f78 100644
+--- a/dlls/winevulkan/vulkan.c
++++ b/dlls/winevulkan/vulkan.c
+@@ -21,7 +21,9 @@
+ #pragma makedep unix
+ #endif
+ 
++#ifndef WINEDOWS_NATIVE_VULKAN
+ #include "config.h"
++#endif
+ #include <time.h>
+ 
+ #include "vulkan_private.h"
+@@ -66,7 +68,7 @@ static void append_debug_utils_object(const VkDebugUtilsObjectNameInfoEXT *objec
+     dst->object_name_len = append_string(object->pObjectName, strings, strings_len);
+ }
+ 
+-static VkBool32 debug_utils_callback_conversion(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
++static VkBool32 VKAPI_CALL debug_utils_callback_conversion(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+     VkDebugUtilsMessageTypeFlagsEXT message_types,
+     const VkDebugUtilsMessengerCallbackDataEXT *callback_data,
+     void *user_data)
+@@ -169,14 +171,20 @@ static VkBool32 debug_utils_callback_conversion(VkDebugUtilsMessageSeverityFlagB
+     }
+ 
+     /* applications should always return VK_FALSE */
++#ifdef WINEDOWS_NATIVE_VULKAN
++    VkBool32 result = ((NTSTATUS (WINAPI *)(void *, ULONG))(UINT_PTR)params->dispatch.callback)(params, size + strings_len);
++    free(params);
++    return result;
++#else
+     KeUserDispatchCallback(&params->dispatch, size + strings_len, &ret_ptr, &ret_len);
+     free(params);
+ 
+     if (ret_len == sizeof(VkBool32)) return *(VkBool32 *)ret_ptr;
+     return VK_FALSE;
++#endif
+ }
+ 
+-static VkBool32 debug_report_callback_conversion(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type,
++static VkBool32 VKAPI_CALL debug_report_callback_conversion(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type,
+     uint64_t object_handle, size_t location, int32_t code, const char *layer_prefix, const char *message, void *user_data)
+ {
+     struct wine_vk_debug_report_params *params;
+@@ -218,11 +226,17 @@ static VkBool32 debug_report_callback_conversion(VkDebugReportFlagsEXT flags, Vk
+     params->layer_len = append_string(layer_prefix, strings, &strings_len);
+     params->message_len = append_string(message, strings, &strings_len);
+ 
++#ifdef WINEDOWS_NATIVE_VULKAN
++    VkBool32 result = ((NTSTATUS (WINAPI *)(void *, ULONG))(UINT_PTR)params->dispatch.callback)(params, sizeof(*params) + strings_len);
++    free(params);
++    return result;
++#else
+     KeUserDispatchCallback(&params->dispatch, sizeof(*params) + strings_len, &ret_ptr, &ret_len);
+     free(params);
+ 
+     if (ret_len == sizeof(VkBool32)) return *(VkBool32 *)ret_ptr;
+     return VK_FALSE;
++#endif
+ }
+ 
+ static void wine_vk_free_command_buffers(struct vulkan_device *device,
+@@ -252,7 +266,11 @@ NTSTATUS init_vulkan(void *arg)
+ {
+     const struct init_params *params = arg;
+ 
++#ifdef WINEDOWS_NATIVE_VULKAN
++    vk_funcs = winedows_vulkan_get_driver(WINE_VULKAN_DRIVER_VERSION);
++#else
+     vk_funcs = __wine_get_vulkan_driver(WINE_VULKAN_DRIVER_VERSION);
++#endif
+     if (!vk_funcs)
+     {
+         ERR("Failed to load Wine graphics driver supporting Vulkan.\n");
+@@ -517,7 +535,7 @@ void wine_vkDestroyCommandPool(VkDevice client_device, VkCommandPool handle,
+ }
+ 
+ static VkResult wine_vk_enumerate_physical_device_groups(struct vulkan_instance *instance,
+-        VkResult (*p_vkEnumeratePhysicalDeviceGroups)(VkInstance, uint32_t *, VkPhysicalDeviceGroupProperties *),
++        VkResult (VKAPI_PTR *p_vkEnumeratePhysicalDeviceGroups)(VkInstance, uint32_t *, VkPhysicalDeviceGroupProperties *),
+         uint32_t *count, VkPhysicalDeviceGroupProperties *properties)
+ {
+     unsigned int i, j;
+@@ -627,7 +645,7 @@ static inline uint64_t convert_timestamp(VkTimeDomainEXT host_domain, VkTimeDoma
+ static VkResult wine_vk_get_timestamps(struct vulkan_device *device, uint32_t timestamp_count,
+                                        const VkCalibratedTimestampInfoEXT *timestamp_infos,
+                                        uint64_t *timestamps, uint64_t *max_deviation,
+-                                       VkResult (*get_timestamps)(VkDevice, uint32_t, const VkCalibratedTimestampInfoEXT *, uint64_t *, uint64_t *))
++                                       VkResult (VKAPI_PTR *get_timestamps)(VkDevice, uint32_t, const VkCalibratedTimestampInfoEXT *, uint64_t *, uint64_t *))
+ {
+     VkCalibratedTimestampInfoEXT* host_timestamp_infos;
+     unsigned int i;
+@@ -661,7 +679,7 @@ static VkResult wine_vk_get_timestamps(struct vulkan_device *device, uint32_t ti
+ static VkResult wine_vk_get_time_domains(struct vulkan_physical_device *physical_device,
+                                          uint32_t *time_domain_count,
+                                          VkTimeDomainEXT *time_domains,
+-                                         VkResult (*get_domains)(VkPhysicalDevice, uint32_t *, VkTimeDomainEXT *))
++                                         VkResult (VKAPI_PTR *get_domains)(VkPhysicalDevice, uint32_t *, VkTimeDomainEXT *))
+ {
+     BOOL supports_device = FALSE, supports_monotonic = FALSE, supports_monotonic_raw = FALSE;
+     const VkTimeDomainEXT performance_counter_domain = get_performance_counter_time_domain();
+diff --git a/dlls/winevulkan/vulkan_loader.h b/dlls/winevulkan/vulkan_loader.h
+index e60467d065827c6de0efbfbaabce48bc5b32e187..d748a8c52b95ed760c083ee4611e8666b351dd7d 100644
+--- a/dlls/winevulkan/vulkan_loader.h
++++ b/dlls/winevulkan/vulkan_loader.h
+@@ -145,6 +145,11 @@ struct is_available_device_function_params
+     const char *name;
+ };
+ 
++#ifdef WINEDOWS_NATIVE_VULKAN
++NTSTATUS winedows_vulkan_call(unsigned int code, void *params);
++#define UNIX_CALL(code, params) winedows_vulkan_call(unix_ ## code, params)
++#else
+ #define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_ ## code, params)
++#endif
+ 
+ #endif /* __WINE_VULKAN_LOADER_H */
+diff --git a/dlls/winevulkan/vulkan_private.h b/dlls/winevulkan/vulkan_private.h
+index bc8fe305a84c8fe0bfebe7ebeea0755f858c3a92..864244e5016e29dfb5254fd2542009c898888d5c 100644
+--- a/dlls/winevulkan/vulkan_private.h
++++ b/dlls/winevulkan/vulkan_private.h
+@@ -20,11 +20,19 @@
+ #ifndef __WINE_VULKAN_PRIVATE_H
+ #define __WINE_VULKAN_PRIVATE_H
+ 
++#ifndef WINEDOWS_NATIVE_VULKAN
+ #include <pthread.h>
++#endif
+ 
+ #include "vulkan_loader.h"
+ #include "vulkan_thunks.h"
+ 
++#ifdef WINEDOWS_NATIVE_VULKAN
++typedef NTSTATUS (*unixlib_entry_t)(void *);
++extern const unixlib_entry_t __wine_unix_call_funcs[];
++const struct vulkan_funcs *winedows_vulkan_get_driver(UINT version);
++#endif
++
+ #include "wine/rbtree.h"
+ 
+ extern const struct vulkan_funcs *vk_funcs;
+@@ -37,7 +45,11 @@ struct wine_instance
+     struct list report_callbacks;
+ 
+     struct rb_tree objects;
++#ifdef WINEDOWS_NATIVE_VULKAN
++    SRWLOCK objects_lock;
++#else
+     pthread_rwlock_t objects_lock;
++#endif
+ };
+ 
+ struct wine_cmd_pool
+diff --git a/dlls/winevulkan/vulkan_thunks.c b/dlls/winevulkan/vulkan_thunks.c
+index dc22cf5ebe5d95e43dcf2b881c24ca917b458568..0bd79f5188ee18afde220d6c2beedb94e60044f9 100644
+--- a/dlls/winevulkan/vulkan_thunks.c
++++ b/dlls/winevulkan/vulkan_thunks.c
+@@ -19,7 +19,9 @@
+ #pragma makedep unix
+ #endif
+ 
++#ifndef WINEDOWS_NATIVE_VULKAN
+ #include "config.h"
++#endif
+ 
+ #include <stdlib.h>
+ 
+diff --git a/dlls/winevulkan/winevulkan.rc b/dlls/winevulkan/winevulkan.rc
+index 2dba00180aba0a370541eb9835bea2ceca0ae8ce..c1335d72abe91a6125fc4da8ab41c204415ea9f7 100644
+--- a/dlls/winevulkan/winevulkan.rc
++++ b/dlls/winevulkan/winevulkan.rc
+@@ -27,4 +27,6 @@
+ #include "wine/wine_common_ver.rc"
+ 
+ /* @makedep: winevulkan.json */
++#ifndef WINEDOWS_NATIVE_VULKAN
+ winevulkan_json RCDATA winevulkan.json
++#endif
+diff --git a/dlls/xactengine3_7/xact_dll.c b/dlls/xactengine3_7/xact_dll.c
+index cf6733106cedf4286b07cacbbcb4dbf289a372af..c8ad8d75e9d84ce4e7adb5fe2a1438a8f0a5c849 100644
+--- a/dlls/xactengine3_7/xact_dll.c
++++ b/dlls/xactengine3_7/xact_dll.c
+@@ -69,6 +69,7 @@ typedef struct _XACT3EngineImpl {
+     XACT_READFILE_CALLBACK pReadFile;
+     XACT_GETOVERLAPPEDRESULT_CALLBACK pGetOverlappedResult;
+     XACT_NOTIFICATION_CALLBACK notification_callback;
++    BOOL persistent_wave_destroy;
+ 
+     void *contexts[XACTNOTIFICATIONTYPE_MAX];
+     struct wine_rb_tree wrapper_lookup;
+@@ -558,6 +559,7 @@ typedef struct _XACT3WaveImpl {
+ 
+     FACTWave *fact_wave;
+     XACT3EngineImpl *engine;
++    BOOL managed, notify_destroy, internal_destroy;
+ } XACT3WaveImpl;
+ 
+ static inline XACT3WaveImpl *impl_from_IXACT3Wave(IXACT3Wave *iface)
+@@ -572,6 +574,8 @@ static HRESULT WINAPI IXACT3WaveImpl_Destroy(IXACT3Wave *iface)
+ 
+     TRACE("(%p)\n", This);
+ 
++    /* An explicit Destroy owns wrapper cleanup, even for a callback handle. */
++    This->managed = FALSE;
+     hr = FACTWave_Destroy(This->fact_wave);
+     wrapper_remove_entry(This->engine, This->fact_wave);
+     HeapFree(GetProcessHeap(), 0, This);
+@@ -783,8 +787,6 @@ static HRESULT WINAPI IXACT3WaveBankImpl_Play(IXACT3WaveBank *iface,
+         XACTLOOPCOUNT nLoopCount, IXACT3Wave** ppWave)
+ {
+     XACT3WaveBankImpl *This = impl_from_IXACT3WaveBank(iface);
+-    XACT3WaveImpl *wave;
+-    FACTWave *fwave;
+     HRESULT hr;
+ 
+     TRACE("(%p)->(0x%x, %lu, 0x%lx, %u, %p)\n", This, nWaveIndex, dwFlags, dwPlayOffset,
+@@ -798,31 +800,10 @@ static HRESULT WINAPI IXACT3WaveBankImpl_Play(IXACT3WaveBank *iface,
+         hr = FACTWaveBank_Play(This->fact_wavebank, nWaveIndex, dwFlags,
+                 dwPlayOffset, nLoopCount, NULL);
+     }else{
+-        hr = FACTWaveBank_Play(This->fact_wavebank, nWaveIndex, dwFlags,
+-                dwPlayOffset, nLoopCount, &fwave);
+-        if(FAILED(hr))
+-            return hr;
+-
+-        wave = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*wave));
+-        if (!wave)
+-        {
+-            FACTWave_Destroy(fwave);
+-            ERR("Failed to allocate XACT3WaveImpl!\n");
+-            return E_OUTOFMEMORY;
+-        }
+-
+-        hr = wrapper_add_entry(This->engine, fwave, &wave->IXACT3Wave_iface);
+-        if (FAILED(hr))
+-        {
+-            FACTWave_Destroy(fwave);
+-            HeapFree(GetProcessHeap(), 0, wave);
+-            return hr;
+-        }
+-
+-        wave->IXACT3Wave_iface.lpVtbl = &XACT3Wave_Vtbl;
+-        wave->fact_wave = fwave;
+-        wave->engine = This->engine;
+-        *ppWave = &wave->IXACT3Wave_iface;
++        /* Register the wrapper before Play can synchronously notify the app. */
++        hr = IXACT3WaveBankImpl_Prepare(iface, nWaveIndex, dwFlags, dwPlayOffset, nLoopCount, ppWave);
++        if (SUCCEEDED(hr))
++            hr = IXACT3WaveImpl_Play(*ppWave);
+     }
+ 
+     return hr;
+@@ -1015,7 +996,11 @@ static XACTNOTIFICATIONTYPE xact_notification_type_from_fact(uint8_t type)
+ static void FACTCALL fact_notification_cb(const FACTNotification *notification)
+ {
+     XACT3EngineImpl *engine = (XACT3EngineImpl *)notification->pvContext;
+-    XACT_NOTIFICATION xnotification;
++    XACT_NOTIFICATION xnotification = {0};
++#if XACT3_VER >= 0x0205
++    XACT3WaveImpl *managed_wave = NULL;
++    BOOL deliver = TRUE;
++#endif
+ 
+     TRACE("notification %d, context %p\n", notification->type, notification->pvContext);
+ 
+@@ -1054,7 +1039,43 @@ static void FACTCALL fact_notification_cb(const FACTNotification *notification)
+         xnotification.wave.pCue = wrapper_find_entry(engine, notification->wave.pCue);
+         xnotification.wave.pSoundBank = wrapper_find_entry(engine, notification->wave.pSoundBank);
+ #if XACT3_VER >= 0x0205
++        xnotification.wave.waveIndex = notification->wave.waveIndex;
+         xnotification.wave.pWave = wrapper_find_entry(engine, notification->wave.pWave);
++        /* No-output WaveBank::Play still supplies a usable wave in callbacks.
++         * Such waves belong to FACT, so create a wrapper only if it is observed
++         * and release it after the engine's destruction notification. */
++        if (!xnotification.wave.pWave && notification->wave.pWave && !notification->wave.pCue
++                && (notification->type == FACTNOTIFICATIONTYPE_WAVEPLAY
++                    || notification->type == FACTNOTIFICATIONTYPE_WAVESTOP
++                    || notification->type == FACTNOTIFICATIONTYPE_WAVEDESTROYED))
++        {
++            XACT3WaveImpl *wave = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*wave));
++            if (wave)
++            {
++                wave->IXACT3Wave_iface.lpVtbl = &XACT3Wave_Vtbl;
++                wave->fact_wave = notification->wave.pWave;
++                wave->engine = engine;
++                wave->managed = TRUE;
++                wave->internal_destroy = TRUE;
++                if (SUCCEEDED(wrapper_add_entry(engine, wave->fact_wave, &wave->IXACT3Wave_iface)))
++                {
++                    FACTNotificationDescription desc = {0};
++                    xnotification.wave.pWave = &wave->IXACT3Wave_iface;
++                    desc.type = FACTNOTIFICATIONTYPE_WAVEDESTROYED;
++                    desc.pWave = wave->fact_wave;
++                    desc.pvContext = engine;
++                    FACTAudioEngine_RegisterNotification(engine->fact_engine, &desc);
++                }
++                else HeapFree(GetProcessHeap(), 0, wave);
++            }
++        }
++        if (notification->type == FACTNOTIFICATIONTYPE_WAVEDESTROYED && xnotification.wave.pWave)
++        {
++            XACT3WaveImpl *wave = impl_from_IXACT3Wave(xnotification.wave.pWave);
++            if (wave->internal_destroy)
++                deliver = engine->persistent_wave_destroy || wave->notify_destroy;
++            if (wave->managed) managed_wave = wave;
++        }
+ #endif
+         xnotification.wave.pWaveBank = wrapper_find_entry(engine, notification->wave.pWaveBank);
+     }
+@@ -1075,7 +1096,16 @@ static void FACTCALL fact_notification_cb(const FACTNotification *notification)
+     }
+     LeaveCriticalSection(&engine->wrapper_lookup_cs);
+ 
++#if XACT3_VER >= 0x0205
++    if (deliver) engine->notification_callback(&xnotification);
++    if (managed_wave)
++    {
++        wrapper_remove_entry(engine, managed_wave->fact_wave);
++        HeapFree(GetProcessHeap(), 0, managed_wave);
++    }
++#else
+     engine->notification_callback(&xnotification);
++#endif
+ }
+ 
+ static HRESULT WINAPI IXACT3EngineImpl_Initialize(IXACT3Engine *iface,
+@@ -1513,6 +1543,10 @@ static HRESULT WINAPI IXACT3EngineImpl_RegisterNotification(IXACT3Engine *iface,
+ {
+     XACT3EngineImpl *This = impl_from_IXACT3Engine(iface);
+     FACTNotificationDescription fdesc;
++    HRESULT hr;
++#if XACT3_VER >= 0x0205
++    BOOL *registered = NULL, previous = FALSE;
++#endif
+ 
+     TRACE("(%p)->(%p)\n", This, pNotificationDesc);
+ 
+@@ -1523,7 +1557,19 @@ static HRESULT WINAPI IXACT3EngineImpl_RegisterNotification(IXACT3Engine *iface,
+     unwrap_notificationdesc(&fdesc, pNotificationDesc);
+     This->contexts[pNotificationDesc->type] = pNotificationDesc->pvContext;
+     fdesc.pvContext = This;
+-    return FACTAudioEngine_RegisterNotification(This->fact_engine, &fdesc);
++#if XACT3_VER >= 0x0205
++    if (pNotificationDesc->type == XACTNOTIFICATIONTYPE_WAVEDESTROYED)
++    {
++        if (pNotificationDesc->flags & XACT_FLAG_NOTIFICATION_PERSIST) registered = &This->persistent_wave_destroy;
++        else if (pNotificationDesc->pWave) registered = &impl_from_IXACT3Wave(pNotificationDesc->pWave)->notify_destroy;
++        if (registered) { previous = *registered; *registered = TRUE; }
++    }
++#endif
++    hr = FACTAudioEngine_RegisterNotification(This->fact_engine, &fdesc);
++#if XACT3_VER >= 0x0205
++    if (FAILED(hr) && registered) *registered = previous;
++#endif
++    return hr;
+ }
+ 
+ static HRESULT WINAPI IXACT3EngineImpl_UnRegisterNotification(IXACT3Engine *iface,
+@@ -1531,6 +1577,7 @@ static HRESULT WINAPI IXACT3EngineImpl_UnRegisterNotification(IXACT3Engine *ifac
+ {
+     XACT3EngineImpl *This = impl_from_IXACT3Engine(iface);
+     FACTNotificationDescription fdesc;
++    HRESULT hr;
+ 
+     TRACE("(%p)->(%p)\n", This, pNotificationDesc);
+ 
+@@ -1540,7 +1587,26 @@ static HRESULT WINAPI IXACT3EngineImpl_UnRegisterNotification(IXACT3Engine *ifac
+ 
+     unwrap_notificationdesc(&fdesc, pNotificationDesc);
+     fdesc.pvContext = This;
+-    return FACTAudioEngine_UnRegisterNotification(This->fact_engine, &fdesc);
++#if XACT3_VER >= 0x0205
++    if (pNotificationDesc->type == XACTNOTIFICATIONTYPE_WAVEDESTROYED)
++    {
++        if (pNotificationDesc->flags & XACT_FLAG_NOTIFICATION_PERSIST) This->persistent_wave_destroy = FALSE;
++        else if (pNotificationDesc->pWave)
++        {
++            XACT3WaveImpl *wave = impl_from_IXACT3Wave(pNotificationDesc->pWave);
++            wave->notify_destroy = FALSE;
++            if (wave->managed)
++            {
++                /* The FACT subscription also owns wrapper cleanup. Updating
++                 * client visibility is enough; never disable that subscription
++                 * and race automatic destruction before reinstalling it. */
++                return S_OK;
++            }
++        }
++    }
++#endif
++    hr = FACTAudioEngine_UnRegisterNotification(This->fact_engine, &fdesc);
++    return hr;
+ }
+ 
+ static XACTCATEGORY WINAPI IXACT3EngineImpl_GetCategory(IXACT3Engine *iface,
+diff --git a/dlls/xaudio2_7/xapo.c b/dlls/xaudio2_7/xapo.c
+index 9a58108cb89df39b7de180b534fc9f0e5b2b7380..e1e510c82d0dae62897d38f9c76c2d5f4c1719b5 100644
+--- a/dlls/xaudio2_7/xapo.c
++++ b/dlls/xaudio2_7/xapo.c
+@@ -184,14 +184,14 @@ static UINT32 WINAPI XAPOFX_CalcInputFrames(IXAPO *iface, UINT32 output_frames)
+ {
+     XA2XAPOFXImpl *This = impl_from_IXAPO(iface);
+     TRACE("%p, %u\n", This, output_frames);
+-    return 0;
++    return This->fapo->CalcInputFrames(This->fapo, output_frames);
+ }
+ 
+ static UINT32 WINAPI XAPOFX_CalcOutputFrames(IXAPO *iface, UINT32 input_frames)
+ {
+     XA2XAPOFXImpl *This = impl_from_IXAPO(iface);
+     TRACE("%p, %u\n", This, input_frames);
+-    return 0;
++    return This->fapo->CalcOutputFrames(This->fapo, input_frames);
+ }
+ 
+ static const IXAPOVtbl XAPOFX_Vtbl = {
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index c1ad48e3fc465610946c102e3257f767ca238108..efdd75987b4e3662f15c6f435e152799542d1eae 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -123,6 +123,62 @@ static HMODULE xinput_instance;
+ static HANDLE start_event;
+ static HANDLE update_event;
+ 
++/* Winedows uses Windows' XUSB driver stack instead of Wine bus. Keep the Wine
++ * frontend (including keystroke generation) and obtain hardware state through
++ * the trusted system XInput transport. The shim loads this independently of
++ * the application's DLL overrides; an ordinary LoadLibrary would recurse.
++ * On Wine this optional interface is absent and the HID backend is unchanged. */
++static struct
++{
++    BOOL active;
++    HMODULE module;
++    DWORD (WINAPI *get_state)(DWORD, XINPUT_STATE *);
++    DWORD (WINAPI *get_state_ex)(DWORD, XINPUT_STATE *);
++    DWORD (WINAPI *set_state)(DWORD, XINPUT_VIBRATION *);
++    DWORD (WINAPI *get_caps)(DWORD, DWORD, XINPUT_CAPABILITIES *);
++    DWORD (WINAPI *get_caps_ex)(DWORD, DWORD, DWORD, XINPUT_CAPABILITIES_EX *);
++    DWORD (WINAPI *get_battery)(DWORD, BYTE, XINPUT_BATTERY_INFORMATION *);
++    DWORD (WINAPI *get_audio_ids)(DWORD, WCHAR *, UINT *, WCHAR *, UINT *);
++    void (WINAPI *enable)(BOOL);
++} windows_backend;
++
++static BOOL WINAPI init_windows_backend(INIT_ONCE *once, void *param, void **context)
++{
++    HMODULE shim = GetModuleHandleW(sizeof(void *) == 8 ? L"winedows64.dll" : L"winedows32.dll");
++    HMODULE (WINAPI *load_backend)(void);
++    HMODULE module;
++
++    if (!shim) return TRUE;
++    windows_backend.active = TRUE;
++    if (!(load_backend = (void *)GetProcAddress(shim, "WinedowsLoadSystemXInput")) ||
++        !(module = load_backend()))
++    {
++        ERR("Windows XInput hardware transport unavailable, error %lu\n", GetLastError());
++        return TRUE;
++    }
++    windows_backend.get_state = (void *)GetProcAddress(module, "XInputGetState");
++    windows_backend.set_state = (void *)GetProcAddress(module, "XInputSetState");
++    windows_backend.get_caps = (void *)GetProcAddress(module, "XInputGetCapabilities");
++    if (!windows_backend.get_state || !windows_backend.set_state || !windows_backend.get_caps ||
++        windows_backend.get_state == XInputGetState)
++    {
++        ERR("Invalid Windows XInput hardware transport\n");
++        windows_backend.get_state = NULL;
++        windows_backend.set_state = NULL;
++        windows_backend.get_caps = NULL;
++        FreeLibrary(module);
++        return TRUE;
++    }
++    windows_backend.module = module;
++    windows_backend.get_state_ex = (void *)GetProcAddress(module, MAKEINTRESOURCEA(100));
++    windows_backend.get_caps_ex = (void *)GetProcAddress(module, MAKEINTRESOURCEA(108));
++    windows_backend.get_battery = (void *)GetProcAddress(module, "XInputGetBatteryInformation");
++    windows_backend.get_audio_ids = (void *)GetProcAddress(module, "XInputGetAudioDeviceIds");
++    windows_backend.enable = (void *)GetProcAddress(module, "XInputEnable");
++    TRACE("Using Windows XInput hardware transport %p\n", module);
++    return TRUE;
++}
++
+ static BOOL find_opened_device(const WCHAR *device_path, int *free_slot)
+ {
+     int i;
+@@ -766,6 +822,9 @@ static BOOL WINAPI start_update_thread_once( INIT_ONCE *once, void *param, void
+ static void start_update_thread(void)
+ {
+     static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
++    static INIT_ONCE backend_once = INIT_ONCE_STATIC_INIT;
++    InitOnceExecuteOnce(&backend_once, init_windows_backend, NULL, NULL);
++    if (windows_backend.active) return;
+     InitOnceExecuteOnce(&init_once, start_update_thread_once, NULL, NULL);
+ }
+ 
+@@ -799,6 +858,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
+         xinput_instance = inst;
+         DisableThreadLibraryCalls(inst);
+         break;
++    case DLL_PROCESS_DETACH:
++        if (!reserved && windows_backend.module) FreeLibrary(windows_backend.module);
++        break;
+     }
+     return TRUE;
+ }
+@@ -815,6 +877,12 @@ void WINAPI DECLSPEC_HOTPATCH XInputEnable(BOOL enable)
+     be sent */
+     start_update_thread();
+ 
++    if (windows_backend.active)
++    {
++        if (windows_backend.enable) windows_backend.enable(enable);
++        return;
++    }
++
+     for (index = 0; index < XUSER_MAX_COUNT; index++)
+     {
+         if (!controller_lock(&controllers[index])) continue;
+@@ -832,7 +900,9 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vib
+ 
+     start_update_thread();
+ 
+-    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++    if (index >= XUSER_MAX_COUNT || !vibration) return ERROR_BAD_ARGUMENTS;
++    if (windows_backend.active)
++        return windows_backend.set_state ? windows_backend.set_state(index, vibration) : ERROR_DEVICE_NOT_CONNECTED;
+     if (!controller_lock(&controllers[index])) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+     ret = HID_set_state(&controllers[index], vibration);
+@@ -851,6 +921,11 @@ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
+     start_update_thread();
+ 
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++    if (windows_backend.active)
++    {
++        if (windows_backend.get_state_ex) return windows_backend.get_state_ex(index, state);
++        return windows_backend.get_state ? windows_backend.get_state(index, state) : ERROR_DEVICE_NOT_CONNECTED;
++    }
+     if (!controller_lock(&controllers[index])) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+     *state = controllers[index].state;
+@@ -1002,7 +1077,21 @@ static DWORD check_for_keystroke(const DWORD index, XINPUT_KEYSTROKE *keystroke)
+         /* note: guide button does not send an event */
+     };
+ 
+-    if (!controller_lock(controller)) return ERROR_DEVICE_NOT_CONNECTED;
++    if (windows_backend.active)
++    {
++        EnterCriticalSection(&controller->crit);
++        ret = windows_backend.get_state ? windows_backend.get_state(index, &controller->state)
++                                        : ERROR_DEVICE_NOT_CONNECTED;
++        if (ret != ERROR_SUCCESS)
++        {
++            /* A newly connected device must not inherit a prior controller's
++             * pending keystrokes for the same user slot. */
++            memset(&controller->last_keystroke, 0, sizeof(controller->last_keystroke));
++            LeaveCriticalSection(&controller->crit);
++            return ret;
++        }
++    }
++    else if (!controller_lock(controller)) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+     cur = &controller->state.Gamepad;
+ 
+@@ -1078,7 +1167,8 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetKeystroke(DWORD index, DWORD reserved, P
+ {
+     TRACE("index %lu, reserved %lu, keystroke %p.\n", index, reserved, keystroke);
+ 
+-    if (index >= XUSER_MAX_COUNT && index != XUSER_INDEX_ANY) return ERROR_BAD_ARGUMENTS;
++    if (!keystroke || (index >= XUSER_MAX_COUNT && index != XUSER_INDEX_ANY)) return ERROR_BAD_ARGUMENTS;
++    start_update_thread();
+ 
+     if (index == XUSER_INDEX_ANY)
+     {
+@@ -1097,6 +1187,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilities(DWORD index, DWORD flags, X
+     XINPUT_CAPABILITIES_EX caps_ex;
+     DWORD ret;
+ 
++    if (!capabilities) return ERROR_BAD_ARGUMENTS;
+     ret = XInputGetCapabilitiesEx(1, index, flags, &caps_ex);
+ 
+     if (!ret) *capabilities = caps_ex.Capabilities;
+@@ -1110,6 +1201,17 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetDSoundAudioDeviceGuids(DWORD index, GUID
+           debugstr_guid(capture_guid));
+ 
+     if (index >= XUSER_MAX_COUNT || !render_guid || !capture_guid) return ERROR_BAD_ARGUMENTS;
++    start_update_thread();
++    if (windows_backend.active)
++    {
++        XINPUT_STATE state;
++        DWORD ret = windows_backend.get_state ? windows_backend.get_state(index, &state) : ERROR_DEVICE_NOT_CONNECTED;
++        if (ret) return ret;
++        /* Windows 8 and later no longer provide DirectSound controller GUIDs. */
++        memset(render_guid, 0, sizeof(*render_guid));
++        memset(capture_guid, 0, sizeof(*capture_guid));
++        return ERROR_SUCCESS;
++    }
+     if (!controllers[index].device) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+     return ERROR_NOT_SUPPORTED;
+@@ -1121,7 +1223,10 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetBatteryInformation(DWORD index, BYTE typ
+ 
+     if (!once++) FIXME("index %lu, type %u, battery %p.\n", index, type, battery);
+ 
+-    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++    if (index >= XUSER_MAX_COUNT || !battery) return ERROR_BAD_ARGUMENTS;
++    start_update_thread();
++    if (windows_backend.active)
++        return windows_backend.get_battery ? windows_backend.get_battery(index, type, battery) : ERROR_DEVICE_NOT_CONNECTED;
+     if (!controllers[index].device) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+     return ERROR_NOT_SUPPORTED;
+@@ -1136,7 +1241,14 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilitiesEx(DWORD unk, DWORD index, D
+ 
+     start_update_thread();
+ 
+-    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++    if (index >= XUSER_MAX_COUNT || !caps) return ERROR_BAD_ARGUMENTS;
++    if (windows_backend.active)
++    {
++        if (windows_backend.get_caps_ex) return windows_backend.get_caps_ex(unk, index, flags, caps);
++        if (!windows_backend.get_caps) return ERROR_DEVICE_NOT_CONNECTED;
++        memset(caps, 0, sizeof(*caps));
++        return windows_backend.get_caps(index, flags, &caps->Capabilities);
++    }
+ 
+     if (!controller_lock(&controllers[index])) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+@@ -1156,3 +1268,17 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilitiesEx(DWORD unk, DWORD index, D
+ 
+     return ret;
+ }
++
++DWORD WINAPI DECLSPEC_HOTPATCH XInputGetAudioDeviceIds(DWORD index, WCHAR *render, UINT *render_count,
++                                                      WCHAR *capture, UINT *capture_count)
++{
++    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++    start_update_thread();
++    if (windows_backend.active)
++        return windows_backend.get_audio_ids ? windows_backend.get_audio_ids(index, render, render_count,
++                                                                             capture, capture_count)
++                                             : ERROR_DEVICE_NOT_CONNECTED;
++    if ((render && !render_count) || (capture && !capture_count)) return ERROR_BAD_ARGUMENTS;
++    if (!controllers[index].device) return ERROR_DEVICE_NOT_CONNECTED;
++    return ERROR_NOT_SUPPORTED;
++}
+diff --git a/dlls/xinput1_4/xinput1_4.spec b/dlls/xinput1_4/xinput1_4.spec
+index 22c511237ddbaf9099a9371c77cb466db5aa3e76..e62a33686c3d283dff7aaf0a622f0db572ddce19 100644
+--- a/dlls/xinput1_4/xinput1_4.spec
++++ b/dlls/xinput1_4/xinput1_4.spec
+@@ -5,6 +5,6 @@
+ 5 stdcall XInputEnable(long)
+ 7 stdcall XInputGetBatteryInformation(long long ptr)
+ 8 stdcall XInputGetKeystroke(long long ptr)
+-10 stub XInputGetAudioDeviceIds(long ptr ptr ptr ptr)
++10 stdcall XInputGetAudioDeviceIds(long ptr ptr ptr ptr)
+ 100 stdcall XInputGetStateEx(long ptr)
+ 108 stdcall XInputGetCapabilitiesEx(long long long ptr)
+diff --git a/include/d3dx10core.h b/include/d3dx10core.h
+index c8c5e97505f88f3b7affb60472d07d05eac4f79e..8962bfb8c6a18613f76a33bec470b7e081c8e0d9 100644
+--- a/include/d3dx10core.h
++++ b/include/d3dx10core.h
+@@ -281,6 +281,7 @@ DECLARE_INTERFACE_(ID3DX10Font, IUnknown)
+ #define ID3DX10Font_DrawTextW(p,a,b,c,d,e,f) (p)->DrawTextW(a,b,c,d,e,f)
+ #endif
+ 
++HRESULT WINAPI D3DX10CheckVersion(UINT d3d_sdk_version, UINT d3dx_sdk_version);
+ HRESULT WINAPI D3DX10UnsetAllDeviceObjects(ID3D10Device *device);
+ HRESULT WINAPI D3DX10CreateDevice(IDXGIAdapter *adapter, D3D10_DRIVER_TYPE driver_type,
+         HMODULE swrast, unsigned int flags, ID3D10Device **device);
+diff --git a/include/d3dx11core.idl b/include/d3dx11core.idl
+index f619e3b1b0291038d57c6f4e9f13902778fd6801..d221fa1f3a320a7c8df89cada3bd779b78e75679 100644
+--- a/include/d3dx11core.idl
++++ b/include/d3dx11core.idl
+@@ -21,6 +21,14 @@ import "ocidl.idl";
+ import "dxgi.idl";
+ import "d3dcommon.idl";
+ 
++cpp_quote("#ifdef __cplusplus")
++cpp_quote("extern \"C\" {")
++cpp_quote("#endif")
++cpp_quote("HRESULT WINAPI D3DX11CheckVersion(UINT d3d_sdk_version, UINT d3dx_sdk_version);")
++cpp_quote("#ifdef __cplusplus")
++cpp_quote("}")
++cpp_quote("#endif")
++
+ [
+     object,
+     local,
+diff --git a/include/wine/vulkan_driver.h b/include/wine/vulkan_driver.h
+index d2e2db3e360b7130298c91b8eda6e7122428233d..1f7463ecacb7b8a00e8591682f8a4cb45962157e 100644
+--- a/include/wine/vulkan_driver.h
++++ b/include/wine/vulkan_driver.h
+@@ -83,7 +83,7 @@ struct VkDevice_T
+     struct VkQueue_T queues[1];
+ };
+ 
+-#ifdef WINE_UNIX_LIB
++#if defined(WINE_UNIX_LIB) || defined(WINEDOWS_VULKAN_HOST)
+ 
+ #include "wine/rbtree.h"
+ #include "wine/list.h"
+diff --git a/libs/faudio/src/FACT.c b/libs/faudio/src/FACT.c
+index e1006cb63fa93b2e1efd130ec24df972d9575296..4d20cfd3f746cd58784656373c5f63d4b72b708f 100644
+--- a/libs/faudio/src/FACT.c
++++ b/libs/faudio/src/FACT.c
+@@ -1834,6 +1834,8 @@ uint32_t FACTWaveBank_Prepare(
+ 
+ 	/* Playback */
+ 	(*ppWave)->state = FACT_STATE_PREPARED;
++	(*ppWave)->stopNotified = false;
++	(*ppWave)->managed = false;
+ 	(*ppWave)->volume = 1.0f;
+ 	(*ppWave)->pitch = 0;
+ 	(*ppWave)->loopCount = nLoopCount;
+@@ -2065,23 +2067,30 @@ uint32_t FACTWaveBank_Play(
+ 	uint8_t nLoopCount,
+ 	FACTWave **ppWave
+ ) {
++	FACTWave *wave;
++	uint32_t result;
+ 	if (pWaveBank == NULL)
+ 	{
+-		*ppWave = NULL;
++		if (ppWave) *ppWave = NULL;
+ 		return 1;
+ 	}
+ 	FAudio_PlatformLockMutex(pWaveBank->parentEngine->apiLock);
+-	FACTWaveBank_Prepare(
++	result = FACTWaveBank_Prepare(
+ 		pWaveBank,
+ 		nWaveIndex,
+ 		dwFlags,
+ 		dwPlayOffset,
+ 		nLoopCount,
+-		ppWave
++		&wave
+ 	);
+-	FACTWave_Play(*ppWave);
++	if (!result)
++	{
++		wave->managed = ppWave == NULL;
++		if (ppWave) *ppWave = wave;
++		result = FACTWave_Play(wave);
++	}
+ 	FAudio_PlatformUnlockMutex(pWaveBank->parentEngine->apiLock);
+-	return 0;
++	return result;
+ }
+ 
+ uint32_t FACTWaveBank_Stop(
+@@ -2115,7 +2124,6 @@ uint32_t FACTWaveBank_Stop(
+ uint32_t FACTWave_Destroy(FACTWave *pWave)
+ {
+ 	FAudioMutex mutex;
+-	FACTNotification note;
+ 	if (pWave == NULL)
+ 	{
+ 		return 1;
+@@ -2138,20 +2146,7 @@ uint32_t FACTWave_Destroy(FACTWave *pWave)
+ 	{
+ 		pWave->parentBank->parentEngine->pFree(pWave->streamCache);
+ 	}
+-	if (pWave->notifyOnDestroy || (pWave->parentBank->parentEngine->notifications & (1u << FACTNOTIFICATIONTYPE_WAVEDESTROYED)))
+-	{
+-		note.type = FACTNOTIFICATIONTYPE_WAVEDESTROYED;
+-		note.wave.pWave = pWave;
+-		if (pWave->parentBank->parentEngine->notifications & (1u << FACTNOTIFICATIONTYPE_WAVEDESTROYED))
+-		{
+-			note.pvContext = pWave->parentBank->parentEngine->wave_context;
+-		}
+-		else
+-		{
+-			note.pvContext = pWave->usercontext;
+-		}
+-		pWave->parentBank->parentEngine->notificationCallback(&note);
+-	}
++	FACT_INTERNAL_SendWaveNotification(pWave, FACTNOTIFICATIONTYPE_WAVEDESTROYED);
+ 
+ 	mutex = pWave->parentBank->parentEngine->apiLock;
+ 	pWave->parentBank->parentEngine->pFree(pWave);
+@@ -2172,6 +2167,7 @@ uint32_t FACTWave_Play(FACTWave *pWave)
+ 		FACT_STATE_PAUSED |
+ 		FACT_STATE_STOPPED
+ 	);
++	FACT_INTERNAL_SendWaveNotification(pWave, FACTNOTIFICATIONTYPE_WAVEPLAY);
+ 	FAudioSourceVoice_Start(pWave->voice, 0, 0);
+ 	FAudio_PlatformUnlockMutex(pWave->parentBank->parentEngine->apiLock);
+ 	return 0;
+@@ -2200,6 +2196,7 @@ uint32_t FACTWave_Stop(FACTWave *pWave, uint32_t dwFlags)
+ 		);
+ 		FAudioSourceVoice_Stop(pWave->voice, 0, 0);
+ 		FAudioSourceVoice_FlushSourceBuffers(pWave->voice);
++		FACT_INTERNAL_SendWaveNotification(pWave, FACTNOTIFICATIONTYPE_WAVESTOP);
+ 	}
+ 	else
+ 	{
+@@ -2207,20 +2204,6 @@ uint32_t FACTWave_Stop(FACTWave *pWave, uint32_t dwFlags)
+ 		FAudioSourceVoice_ExitLoop(pWave->voice, 0);
+ 	}
+ 
+-	if (pWave->parentBank->parentEngine->notifications & (1u << FACTNOTIFICATIONTYPE_WAVESTOP))
+-	{
+-		FACTNotification note;
+-		note.type = FACTNOTIFICATIONTYPE_WAVESTOP;
+-		note.wave.cueIndex = pWave->parentCue->index;
+-		note.wave.pCue = pWave->parentCue;
+-		note.wave.pSoundBank = pWave->parentCue->parentBank;
+-		note.wave.pWave = pWave;
+-		note.wave.pWaveBank = pWave->parentBank;
+-		note.pvContext = pWave->parentBank->parentEngine->wave_context;
+-
+-		pWave->parentBank->parentEngine->notificationCallback(&note);
+-	}
+-
+ 	FAudio_PlatformUnlockMutex(pWave->parentBank->parentEngine->apiLock);
+ 	return 0;
+ }
+diff --git a/libs/faudio/src/FACT_internal.c b/libs/faudio/src/FACT_internal.c
+index eb019e38f8aa7685daf1223ead2695465d398bda..1b8359768dff99234baca420c0d08e6a23c97382 100644
+--- a/libs/faudio/src/FACT_internal.c
++++ b/libs/faudio/src/FACT_internal.c
+@@ -848,6 +848,34 @@ void FACT_INTERNAL_SendCueNotification(FACTCue *cue, uint8_t type)
+     }
+ }
+ 
++void FACT_INTERNAL_SendWaveNotification(FACTWave *wave, uint8_t type)
++{
++	FACTAudioEngine *engine = wave->parentBank->parentEngine;
++	FACTNotification note = {0};
++	bool send = true;
++
++	if (type == FACTNOTIFICATIONTYPE_WAVEPLAY)
++		wave->stopNotified = false;
++	else if (type == FACTNOTIFICATIONTYPE_WAVESTOP)
++	{
++		send = !wave->stopNotified;
++		wave->stopNotified = true;
++	}
++	if (!send || (!(engine->notifications & (1u << type))
++		&& !(type == FACTNOTIFICATIONTYPE_WAVEDESTROYED && wave->notifyOnDestroy)))
++		return;
++	note.type = type;
++	note.timeStamp = FAudio_timems() & 0x7fffffff;
++	note.pvContext = (engine->notifications & (1u << type)) ? engine->wave_context : wave->usercontext;
++	note.wave.pWave = wave;
++	note.wave.pWaveBank = wave->parentBank;
++	note.wave.waveIndex = wave->index;
++	note.wave.cueIndex = wave->parentCue ? wave->parentCue->index : FACTINDEX_INVALID;
++	note.wave.pCue = wave->parentCue;
++	note.wave.pSoundBank = wave->parentCue ? wave->parentCue->parentBank : NULL;
++	engine->notificationCallback(&note);
++}
++
+ void FACT_INTERNAL_DestroySound(FACTSoundInstance *sound)
+ {
+ 	uint8_t i;
+@@ -1682,7 +1710,8 @@ void FACT_INTERNAL_UpdateCue(FACTCue *cue)
+ int32_t FACT_INTERNAL_APIThread(void* enginePtr)
+ {
+ 	FACTAudioEngine *engine = (FACTAudioEngine*) enginePtr;
+-	LinkedList *sbList;
++	LinkedList *sbList, *wbList, *waveList, *nextWave;
++	FACTWave *wave;
+ 	FACTCue *cue, *cBackup;
+ 	uint32_t timestamp, updateTime;
+ 
+@@ -1705,6 +1734,22 @@ threadstart:
+ 
+ 	FACT_INTERNAL_UpdateEngine(engine);
+ 
++	/* Do not invoke application callbacks from OnStreamEnd: a callback can
++	 * query GetState and acquire apiLock while another thread holds that lock
++	 * in DestroyVoice waiting for the renderer. Dispatch here while objects
++	 * are still protected by apiLock; explicit Stop/Destroy dispatch directly. */
++	for (wbList = engine->wbList; wbList; wbList = wbList->next)
++	for (waveList = ((FACTWaveBank*) wbList->entry)->waveList; waveList; waveList = nextWave)
++	{
++		nextWave = waveList->next;
++		wave = (FACTWave*) waveList->entry;
++		if (wave->state & FACT_STATE_STOPPED)
++		{
++			FACT_INTERNAL_SendWaveNotification(wave, FACTNOTIFICATIONTYPE_WAVESTOP);
++			if (wave->managed) FACTWave_Destroy(wave);
++		}
++	}
++
+ 	sbList = engine->sbList;
+ 	while (sbList != NULL)
+ 	{
+diff --git a/libs/faudio/src/FACT_internal.h b/libs/faudio/src/FACT_internal.h
+index f2b4d7f40e6b522321cd7cb3e8fc89f8f3626c28..c206f7abf682470e322f0944a129851af86f6b37 100644
+--- a/libs/faudio/src/FACT_internal.h
++++ b/libs/faudio/src/FACT_internal.h
+@@ -569,6 +569,9 @@ struct FACTWave
+ 	void *usercontext;
+ 
+ 	/* Playback */
++	/* Notifications are dispatched with the engine API lock held. */
++	bool stopNotified;
++	bool managed;
+ 	uint32_t state;
+ 	float volume;
+ 	int16_t pitch;
+@@ -646,6 +649,7 @@ void FACT_INTERNAL_BeginFadeOut(FACTSoundInstance *sound, uint16_t fadeOutMS);
+ void FACT_INTERNAL_BeginReleaseRPC(FACTSoundInstance *sound, uint16_t releaseMS);
+ 
+ void FACT_INTERNAL_SendCueNotification(FACTCue *cue, uint8_t type);
++void FACT_INTERNAL_SendWaveNotification(FACTWave *wave, uint8_t type);
+ 
+ /* RPC Helper Functions */
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index 87a7d48acca789bbf1a3f7ccf2aea71194cc85bc..e193665ed148e8308f279668f549ad3b02aea0f1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -2237,6 +2237,92 @@ static void d3dbc_write_program_instructions(struct d3dbc_compiler *d3dbc)
+     }
+ }
+ 
++static int d3dbc_lower_ps2_texld_coords(struct vsir_program *program)
++{
++    struct vsir_program_iterator it = vsir_program_iterator(&program->instructions), mov_it;
++    uint32_t sampler_masks[16], mask;
++    struct vkd3d_shader_instruction *ins, *mov;
++    struct vkd3d_shader_src_param coords;
++    struct vkd3d_shader_location loc;
++    unsigned int sampler, temp, component;
++    bool identity;
++
++    if (program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL || program->shader_version.major != 2)
++        return VKD3D_OK;
++
++    for (sampler = 0; sampler < ARRAY_SIZE(sampler_masks); ++sampler)
++        sampler_masks[sampler] = VKD3DSP_WRITEMASK_ALL;
++    for (ins = vsir_program_iterator_head(&it); ins; ins = vsir_program_iterator_next(&it))
++    {
++        const struct vkd3d_shader_semantic *semantic = &ins->declaration.semantic;
++
++        if (ins->opcode != VSIR_OP_DCL || semantic->resource.reg.reg.type != VKD3DSPR_COMBINED_SAMPLER)
++            continue;
++        sampler = semantic->resource.reg.reg.idx[0].offset;
++        if (sampler >= ARRAY_SIZE(sampler_masks))
++            continue;
++        if (semantic->resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_2D)
++            sampler_masks[sampler] = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_1;
++        else if (semantic->resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_CUBE
++                || semantic->resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_3D)
++            sampler_masks[sampler] = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_1 | VKD3DSP_WRITEMASK_2;
++    }
++
++    for (ins = vsir_program_iterator_head(&it); ins; ins = vsir_program_iterator_next(&it))
++    {
++        if (ins->opcode != VSIR_OP_TEXLD || ins->src_count != 2)
++            continue;
++        coords = ins->src[0];
++        sampler = ins->src[1].reg.idx[0].offset;
++        mask = sampler < ARRAY_SIZE(sampler_masks) ? sampler_masks[sampler] : VKD3DSP_WRITEMASK_ALL;
++        if (ins->flags & (VKD3DSI_TEXLD_PROJECT | VKD3DSI_TEXLD_BIAS))
++            mask |= VKD3DSP_WRITEMASK_3;
++        identity = !coords.modifiers;
++        for (component = 0; component < VKD3D_VEC4_SIZE; ++component)
++        {
++            if ((mask & (1u << component)) && vsir_swizzle_get_component(coords.swizzle, component) != component)
++                identity = false;
++        }
++
++        /* ps_2_x texld does not accept coordinate swizzles or modifiers. An
++         * input t# needs no move when only unused components are swizzled. */
++        if (identity && coords.reg.type == VKD3DSPR_TEXTURE)
++        {
++            ins->src[0].swizzle = VKD3D_SHADER_NO_SWIZZLE;
++            continue;
++        }
++
++        /* Materialise actual permutations before register allocation. Write
++         * a full temporary so packing cannot reintroduce a texld swizzle.
++         * Scalar moves use replicate swizzles, which are also valid in ps_2_0.
++         * Fill unused components from x instead of reading undeclared inputs. */
++        loc = ins->location;
++        temp = program->temp_count++;
++        if (!(mov = vsir_program_iterator_insert_before(&it, &mov_it, VKD3D_VEC4_SIZE)))
++            return VKD3D_ERROR_OUT_OF_MEMORY;
++        for (component = 0; component < VKD3D_VEC4_SIZE; ++component)
++        {
++            unsigned int source = vsir_swizzle_get_component(coords.swizzle, mask & (1u << component) ? component : 0);
++
++            if (!vsir_instruction_init_with_params(program, mov, &loc, VSIR_OP_MOV, 1, 1))
++                return VKD3D_ERROR_OUT_OF_MEMORY;
++            vsir_dst_param_init(&mov->dst[0], VKD3DSPR_TEMP, coords.reg.data_type, 1);
++            mov->dst[0].reg.idx[0].offset = temp;
++            mov->dst[0].reg.dimension = VSIR_DIMENSION_VEC4;
++            mov->dst[0].write_mask = 1u << component;
++            mov->src[0] = coords;
++            mov->src[0].swizzle = vkd3d_shader_create_swizzle(source, source, source, source);
++            mov = vsir_program_iterator_next(&mov_it);
++        }
++        ins = vsir_program_iterator_current(&it);
++        vsir_src_param_init(&ins->src[0], VKD3DSPR_TEMP, coords.reg.data_type, 1);
++        ins->src[0].reg.idx[0].offset = temp;
++        ins->src[0].reg.dimension = VSIR_DIMENSION_VEC4;
++        ins->src[0].swizzle = VKD3D_SHADER_NO_SWIZZLE;
++    }
++    return VKD3D_OK;
++}
++
+ int d3dbc_compile(struct vsir_program *program, uint64_t config_flags,
+         const struct vkd3d_shader_compile_info *compile_info, const struct vkd3d_shader_code *ctab,
+         struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
+@@ -2249,6 +2335,9 @@ int d3dbc_compile(struct vsir_program *program, uint64_t config_flags,
+     if ((result = vsir_program_optimize(program, config_flags, compile_info, message_context)))
+         return result;
+ 
++    if ((result = d3dbc_lower_ps2_texld_coords(program)))
++        return result;
++
+     if ((result = vsir_allocate_temp_registers(program, message_context)))
+         return result;
+ 
+diff --git a/tools/winebuild/import.c b/tools/winebuild/import.c
+index 2d7caa0883ed1f54c7c4e03d6cd99dca7b0e473a..7a64961cb68c1cecce46d91ecf1185e9ab38d0b0 100644
+--- a/tools/winebuild/import.c
++++ b/tools/winebuild/import.c
+@@ -1209,6 +1209,10 @@ static const char *get_target_machine(void)
+ void output_static_lib( const char *output_name, struct strarray files, int create )
+ {
+     struct strarray args;
++#ifdef _WIN32
++    unsigned int first_object, i;
++    size_t command_length = 0;
++#endif
+ 
+     if (!create || target.platform != PLATFORM_WINDOWS)
+     {
+@@ -1223,8 +1227,36 @@ void output_static_lib( const char *output_name, struct strarray files, int crea
+         strarray_add( &args, strmake( "-machine:%s", get_target_machine() ));
+         strarray_add( &args, strmake( "-out:%s", output_name ));
+     }
++#ifdef _WIN32
++    first_object = args.count;
++#endif
+     strarray_addall( &args, as_files );
+     strarray_addall( &args, files );
++#ifdef _WIN32
++    /* Large import libraries exceed the native Windows command-line limit.
++     * Both GNU ar and the PE librarian accept object lists in response files. */
++    for (i = 0; i < args.count; i++) command_length += strlen( args.str[i] ) + 3;
++    if (command_length > 24000)
++    {
++        const char *response = make_temp_file( "archive", ".rsp" );
++        FILE *file = fopen( response, "w" );
++        if (!file) fatal_perror( "Cannot create archive response file" );
++        for (i = first_object; i < args.count; i++)
++        {
++            const char *p;
++            fputc( '"', file );
++            for (p = args.str[i]; *p; p++)
++            {
++                if (*p == '\\' || *p == '"') fputc( '\\', file );
++                fputc( *p, file );
++            }
++            fputs( "\"\n", file );
++        }
++        if (fclose( file )) fatal_perror( "Cannot write archive response file" );
++        args.count = first_object;
++        strarray_add( &args, strmake( "@%s", response ));
++    }
++#endif
+     if (create) unlink( output_name );
+     spawn( args );
+ 
+diff --git a/tools/wrc/utils.c b/tools/wrc/utils.c
+index f0744638271dfd38fa60bb1b903a5c0450d5461d..cedff8094b6f967b39fd63aa4560a68e8d2364dd 100644
+--- a/tools/wrc/utils.c
++++ b/tools/wrc/utils.c
+@@ -202,24 +202,6 @@ static WCHAR *codepage_to_unicode( int codepage, const char *src, int srclen, in
+     return dst;
+ }
+ 
+-int get_language_codepage( language_t lang )
+-{
+-    DWORD codepage;
+-
+-    if (!lang) return 1252;
+-    if (!GetLocaleInfoW( lang, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER,
+-                         (WCHAR *)&codepage, sizeof(codepage)/sizeof(WCHAR) )) return -1;
+-    return codepage;
+-}
+-
+-language_t get_language_from_name( const char *name )
+-{
+-    WCHAR nameW[LOCALE_NAME_MAX_LENGTH];
+-
+-    MultiByteToWideChar( 1252, 0, name, -1, nameW, ARRAY_SIZE(nameW) );
+-    return LocaleNameToLCID( nameW, LOCALE_ALLOW_NEUTRAL_NAMES );
+-}
+-
+ #else  /* _WIN32 */
+ 
+ struct nls_info
+@@ -320,6 +302,11 @@ static WCHAR *codepage_to_unicode( int codepage, const char *src, int srclen, in
+     return dst;
+ }
+ 
++#endif  /* _WIN32 */
++
++/* Use Wine's locale identifiers on every build host. Windows may return the
++ * same LOCALE_CUSTOM_UNSPECIFIED id for several distinct translated locales,
++ * which would produce duplicate resource entries and lose their identity. */
+ static const NLS_LOCALE_LCID_INDEX *lcids_index;
+ static const NLS_LOCALE_HEADER *locale_table;
+ static const NLS_LOCALE_LCNAME_INDEX *lcnames_index;
+@@ -426,8 +413,6 @@ language_t get_language_from_name( const char *name )
+     return get_locale_data( entry->idx )->unique_lcid;
+ }
+ 
+-#endif  /* _WIN32 */
+-
+ static WCHAR *utf8_to_unicode( const char *src, int srclen, int *dstlen )
+ {
+     static const char utf8_length[128] =

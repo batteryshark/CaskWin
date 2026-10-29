@@ -1,0 +1,81 @@
+D3DX11_43 native Windows helper coverage
+======================================
+
+Choice and actual local use
+---------------------------
+The saved read-only GameRepo PE inventory identifies these imports:
+* Outlast x86/x64 OLGame executables: D3DX11CheckVersion.
+* Outlast x86/x64 UE3ShaderCompileWorker: D3DX11CompileFromMemory.
+* The Witcher 3 NVHair_x64: D3DX11CreateTextureFromMemory.
+* Lunar Remastered Collection: texture helpers and D3DX11CreateThreadPump.
+* Dark Souls III: D3DX11SaveTextureToFileW.
+
+The relevant archive/member/SHA256 records are copied into
+native/windows/test-output/helpers-07/selection-evidence.json. These are import
+observations, not claims that those games have been launched successfully.
+D3DX10_43 also appears in Oceanhorn, but its requested sprite/font drawing
+paths are upstream stubs and provide less immediate coverage.
+
+Implementation and dependencies
+-------------------------------
+This is the actual Wine dlls/d3dx11_43 implementation, compiled as native PE
+for x86/x64. Its real shader compiler dependency is d3dcompiler_47, despite
+its D3DX11_43 name; that Wine compiler in turn uses wined3d. The graphics
+device passed into the helper remains independent: both native and Wine
+ID3D11Device interfaces work. Native ole32/user32 and the delayed Windows
+imaging codec interface remain host backends. No Unix runtime is imported.
+
+The only initial upstream correction is D3DX11CheckVersion's HRESULT
+contract and its missing public header declaration. Microsoft's official
+Microsoft.DXSDK.D3DX 9.29.952.8 D3DX11core.h declares HRESULT; both installed
+Microsoft-signed native DLLs return S_OK for (7,43) and E_FAIL for mismatches.
+Wine returned BOOL 1/0. The correction is unconditional, not a native-only
+workaround, and includes a regression in Wine's d3dx11 tests. The standalone
+behavioral probe also compares those version tuples on both providers.
+Evidence: helpers-07/version-contract-evidence.json.
+Official package: https://www.nuget.org/packages/Microsoft.DXSDK.D3DX/9.29.952.8
+
+The shared declaration also exposed the same incorrect BOOL definition in
+d3dx11_42. Its matching HRESULT correction preserves that module's build:
+isolated x86/x64 builds pass, and six version tuples match both installed,
+Microsoft-signed native42 DLLs. This consistency fix does not add version42
+to the runtime catalog. Evidence: helpers-07/consistency42/result.json.
+
+Validation
+----------
+build-d3dx11-probe.ps1 builds real static-import and dynamic-load fixtures.
+test-d3dx11.ps1 accepts RuntimeDirectory, FixtureDirectory, HelperDirectory,
+and OutputDirectory. PreCatalog tests use app-local helper copies in an
+isolated prefix; integrated tests exercise the provider catalog and missing
+builtin fallback/strict rejection. No game files or release runtimes are
+modified by the test.
+
+Each successful case checks exact helper and compiler file identity,
+D3DX11CheckVersion success/failure, SM4 vertex/pixel and SM5 compute shader
+compilation, macro/include callback balance, malformed HLSL diagnostics,
+RGBA and BC1 DDS texture loading, and 32 independently known rendered pixels.
+Texture colors are sampled and channel-remapped by helper-compiled shaders;
+this verifies compilation and texture processing together on the selected
+real D3D11 device. Null-device and malformed-image failures are also checked.
+
+The pre-catalog 16-case matrix passed for native/Wine helper, native/Wine
+D3D11, x86/x64, and static/dynamic imports. Wine-helper cases selected Wine
+compiler 47 explicitly. Result:
+helpers-07/d3dx11-a4bd9599b099445481dd44a05fedbc65/result.json.
+
+The integrated runtime07 24-case matrix also passed: the same 16 provider
+combinations, four native fallback cases with the builtin unavailable, and
+four intentional strict-builtin rejections, all split across architecture
+and static/dynamic imports. The 20 successful cases checked six version
+tuples and 640 rendered/readback pixels in total. Result:
+helpers-07/d3dx11-929ba57de60e4bae8a317a36a2e33ecc/result.json.
+
+Limits
+------
+D3DX11CreateThreadPump is still an upstream stub. Texture-saving APIs return
+E_NOTIMPL; asynchronous pumping and those saving paths are not advertised as
+implemented by this work. In particular, the Lunar and Dark Souls III import
+observations do not establish game compatibility. Native helper selection
+remains available for applications requiring those paths.
+The new upstream test source is included for maintainers; the executed
+native-runtime evidence comes from test-d3dx11.ps1, not a full Wine tests run.

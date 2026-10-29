@@ -1,0 +1,73 @@
+Native Windows Wine D3DX10 helper coverage
+
+The opt-in d3dx10_43 provider is the actual Wine implementation. Its compiler
+dependency is Wine d3dcompiler_47; matrix/math exports forward to the actual Wine
+d3dx9_36 provider. D3DX9_36 requires d3dcompiler_47, d3dxof and wined3d. Public
+D3D10/DXGI device providers remain independently selectable. MSYS2 is used only
+to build native PE DLLs; these modules have no POSIX or MinGW DLL dependencies.
+
+Selection evidence: saved GameRepo PE import inventory identifies x86
+Oceanhorn.exe (SHA256
+4ac8ccd9eca35d0d8823e52ea879eb149599024337e3e72601092c6eac63c386)
+importing D3DX10CreateEffectFromMemory, D3DXMatrixMultiply/Translation/Scaling,
+D3DX10CreateSprite and D3DX10CreateFontW. No game archive was modified or launched
+for this helper work. Sprite/font imports do NOT establish game compatibility:
+their upstream drawing methods remain incomplete.
+
+build-d3dx10-probe.ps1 builds x86/x64 dynamic and actual static-import fixtures.
+It also generates d3dx10-draw.fxo from the visible effect_source HLSL in the probe
+using the installed fixed-path native d3dcompiler_43. This independent 1,721-byte
+application asset is test input, not a replacement for any Wine implementation.
+No GPU is used during fixture generation. Tests require this asset alongside
+the four probe executables in FixtureDirectory.
+
+test-d3dx10.ps1 verifies:
+- Exact helper, compiler, graphics and forwarded-math file identities, including
+  the real static IAT destinations (a native export cannot pass as Wine).
+- HRESULT version contract, independent translation/scaling matrices and both
+  noncommutative multiplication orders.
+- Real SM4 vertex/pixel compilation, include/macro callbacks and invalid-HLSL
+  diagnostics through the selected helper and compiler.
+- RGBA and BC1 DDS helper texture decoding/upload, shader draws and independently
+  calculated readback pixels (32 pixels across these two draws).
+- A source-compiled raster-state effect, applied pass, and exact raster state.
+- The independent compiled shader effect parsed by the selected helper/D3D10,
+  uniform/resource updates, applied passes and another 32 GPU readback pixels.
+- Both architectures, static/dynamic loading and native/Wine graphics/helper
+  combinations; missing-helper fallback and strict-builtin failure after catalog
+  integration. --PreCatalog uses private app-local providers during development.
+  --CpuOnly is a separate non-rendering mode and is not GPU evidence.
+
+Version correction: Microsoft's cached DirectX SDK header declares HRESULT for
+D3DX10CheckVersion; installed Microsoft-signed native DLLs return S_OK/E_FAIL.
+Wine's previous BOOL TRUE/FALSE implementation was wrong. All source versions
+33..43 now use the correct HRESULT contract, with a shared header declaration
+and six upstream43 test tuples. Native33 uses helper SDK1001; native34..43 use
+their version numbers. All eleven affected modules were built privately for
+both architectures. Six tuples per native/Wine module produce 264 matching
+comparisons. Only43 and its required math provider36 enter the native catalog.
+
+Known upstream limits retained:
+- FX source that embeds CompileShader assignments to shader states returns
+  E_NOTIMPL in Wine's compiler. The successful compiled-shader-effect test does
+  not claim that source construct works; the state-only source effect does work.
+- Wine D3D10 ID3D10Effect::IsValid is a stub. GetDesc, parameter/pass/state behavior
+  and actual render output are verified independently instead.
+- ID3DX10Sprite drawing and ID3DX10Font::DrawText are unfinished.
+- Shader-resource-view convenience loaders and texture-save exports remain
+  stubs; no parity claim is made for the untested async/mesh/font/sprite APIs.
+- Native fallback remains necessary for unsupported APIs. This is bounded helper
+  coverage, not a claim that Oceanhorn or all D3DX10 games work.
+
+Initial evidence (workspace test-output/helpers-09):
+  baseline/native-gpu-{32,64}-{probe,import-probe}.log
+  version-consistency/result.json (44 native/Wine cases,264 HRESULT comparisons)
+  d3dx10-1f133c9869a24bf193fa5a6f2d5cca3f/result.json
+    (16 pre-catalog mixed-provider cases,1,024 independent GPU pixels)
+  d3dx10-f1a1b5aa537c49908ee4771619929a6a/result.json
+    (runtime09-candidate integrated24/24:16 mixed-provider renders,4 native
+    fallback renders,4 strict expected failures;1,280 independent GPU pixels)
+
+The extracted-package smoke uses both static-import probes plus d3dx10-draw.fxo
+from FixtureDirectory and requires the packaged Wine helper and math DLL file
+identities. Packaging/archive execution is coordinated by the parent task.

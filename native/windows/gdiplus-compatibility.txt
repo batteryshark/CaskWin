@@ -1,0 +1,86 @@
+Wine GDI+ native Windows helper coverage
+=======================================
+
+Selection evidence
+------------------
+Read-only GameRepo PE inspection found 53 GDI+ imports in Castlevania Advance
+Collection/game.exe, including bitmap locking, gradients, path drawing, font
+outlines, clipping and character measurement. Katana Zero, Death's Gambit and
+Dungeons of Infinity also import startup/shutdown; those imports alone do not
+prove use of drawing APIs. Exact archive/member/hash/import records are in
+test-output/helpers-08/targeted-import-evidence.json. No game compatibility
+claim follows from this helper fixture alone.
+
+Implementation
+--------------
+The module is the real Wine dlls/gdiplus implementation, compiled to x86/x64
+PE. Its imports are native gdi32, kernel32, ntdll, ole32, oleaut32, shlwapi,
+ucrtbase and user32. It uses delayed native mlang/windowscodecs backends, with
+Wine's actual image, path, brush, text and pixel-processing code retained.
+
+Two narrow font corrections are required with the Windows GDI backend:
+* Skip legacy non-TrueType vector faces before enumerating font metrics.
+  Previously the Windows Modern vector font aborted every installed-family
+  lookup with OutOfMemory, including Arial and missing-family queries.
+* AddFontMemResourceEx creates non-enumerable process-private fonts on Windows.
+  If normal enumeration adds no family, select the registered face and accept
+  it only when its actual name matches the full/family name parsed from the
+  supplied font. The fallback is limited to a single SFNT face; TTC and
+  multiple-face collections are not added by this work. Failed additions
+  remove the font resource and roll back family entries. Successful font
+  resources retain upstream's process-private lifetime until process exit.
+The existing name parser now bounds directory and name-record reads and
+checks allocation failures. The tested malformed font leaves the collection
+empty on both providers, although native returns Ok and Wine returns an error.
+
+Microsoft documents memory-font visibility and process lifetime here:
+https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-addfontmemresourceex
+
+Prefix imaging default
+----------------------
+Native WIC PNG WritePixels returned WINCODEC_ERR_INVALIDREGISTRATION because
+the prefix lacked CLSID_WICImagingCategories. Initializing only its empty
+Instance container fixes both architectures. No host codec list is copied.
+Existing private user or machine class keys, including empty ones, remain
+authoritative. imaging-defaults-probe verifies those preservation cases and
+that initialization leaves the new container empty.
+
+Validation
+----------
+build-gdiplus-probe.ps1 builds actual static-import and dynamic-load fixtures.
+test-gdiplus.ps1 exercises native baselines, explicit native/Wine providers,
+missing-builtin native fallback and strict-builtin rejection on both arches.
+The probe checks provider file identity from the real startup IAT target for
+static imports. Native GDI+ is resolved through its actual WinSxS identity;
+native side-by-side redirection cannot silently count as a Wine provider.
+
+Behavioral assertions include transformed path/clipping against 256 exact
+ARGB pixels with a translucent background, bitmap cloning, real PNG signatures and exact stream/file pixel
+roundtrips. Prefix output files must exist only under the prefix drive_c.
+Font tests use Wine's bundled wine_test.ttf with a unique family that is absent
+from installed-font lookup, copied into the prefix. They check installed
+generic-font lookup, private family ownership, character-range measurements,
+28-point ADAD outlines and rasterized pixels bounded by the glyph geometry.
+Glyph pixels differ between implementations (native 36, Wine 43 in this
+fixture); exact font rasterization parity is not claimed. A guard-page
+truncated-font test verifies bounded parsing without adding a family.
+
+Standalone native/Wine checks passed on both architectures:
+test-output/helpers-08/baseline/unique-font-result.json.
+The integrated runtime08-native-sxs matrix passed all 20 cases: four native
+baselines, eight prefix provider/import cases, four missing-builtin native
+fallback successes, and four intentional strict-builtin rejections. Static
+imports identify the real Wine IAT provider on both architectures. The 16
+successful cases check 4,096 independent path pixels plus exact clone/PNG
+roundtrips. Source and copied prefix font hashes match; the corresponding
+host output path remains absent. Evidence:
+test-output/helpers-08/gdiplus-8515c88a921144c89a173486c3290cf4/result.json.
+Imaging-default preservation and native public WIC decode regression passed:
+test-output/imaging-defaults-30a559040d69403fbe00b879749fd277/result.json.
+
+Scope
+-----
+This covers the tested bitmap/path/text/PNG operations. It does not establish
+all GDI+ API coverage, exact text rasterization equivalence, TTC support, or a
+successful run of Castlevania Advance Collection. Native fallback remains
+necessary for unsupported APIs and applications with different requirements.

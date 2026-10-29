@@ -1,0 +1,242 @@
+WineD3D native Windows context and driver boundaries (0.9 investigation)
+======================================================================
+
+Confirmed failure and scope
+---------------------------
+Astalon 1.1.0 (x86 Unity 2019.4.13) crashes when the native-host Wine
+OpenGL renderer runs with WINE_D3D_CONFIG=renderer=gl,csmt=0. The first
+thread's texture upload succeeds. A subsequent application thread creates
+another shared WGL context, which fails while the original context remains
+current on the first thread. Wine then dereferences the missing context in
+wined3d_texture_gl_prepare_texture (0.8 x86 wined3d RVA 0xce173).
+
+The independent fixture reproduces this on both actual GL renderers:
+  NVIDIA GeForce RTX 4090: GetLastError 0xc00710dd, low Win32 code 4317
+                          ERROR_INVALID_OPERATION (not HRESULT_FROM_WIN32).
+  Intel UHD Graphics 770: GetLastError 0xaa, ERROR_BUSY.
+
+Temporarily unbinding the first context in the fixture makes all operations
+pass using unchanged 0.8 DLLs. This is a diagnostic control, not the normal
+passing test path and not an application workaround required by the fix.
+
+Implementation
+--------------
+dlls/wined3d/context_gl.c and wined3d_gl.h cache release_on_exit per context
+only when the actual command stream has no worker thread and native ntdll
+does not export wine_get_version. At the outermost release of the currently
+owned context, the existing set_current(NULL) path flushes commands and
+clears both native WGL and Wine TLS/current state. Nested acquisitions,
+restored foreign application GL contexts, and delayed/destroyed contexts
+retain their existing handling. Asynchronous CSMT and ordinary Wine ntdll
+paths keep the previous behavior.
+
+Native synchronous teardown uses glFinish on the context being destroyed,
+instead of reacquiring a context after removing it from the device list.
+Internally owned submitted fences are explicitly destroyed before deleting
+their GL free list; caller-owned query fences retain their normal ownership.
+The change deliberately does not turn a failed upload into silent success.
+
+Fixture and commands
+--------------------
+  build-d3d11-texture-thread-probe.ps1
+  d3d11-texture-thread-probe.cpp
+  test-d3d11-texture-thread.ps1
+
+Example (from repository root):
+  & native/windows/build-d3d11-texture-thread-probe.ps1
+  & native/windows/test-d3d11-texture-thread.ps1 `
+      -RuntimeDirectory native/windows/test-output/runtime09-graphics `
+      -Bits 32 -Preference discrete -Desktop -SwapChain
+
+The discrete executable exports NvOptimusEnablement and
+AmdPowerXpressRequestHighPerformance, matching Astalon. GL_RENDERER trace
+proves the active backend; DXGI's reported adapter name alone is insufficient.
+The fixture uses sequential same-device operations on the main thread, a
+worker, a replacement worker after thread exit, and the main thread again.
+It checks initial texture data, SRVs, exact staging pixels, bounded EVENT
+query completion, worker-recorded deferred commands and full COM teardown.
+An optional foreign-context case also checks HGLRC/HDC preservation across
+device creation, texture upload/readback and destruction. No Present, input,
+capture, original-game modifications or host display/audio changes occur.
+
+Each child has a 45-second watchdog; query polling is bounded to 10 seconds.
+The runner captures through gui-log-capture with a 16 MiB log cap and records
+truncation metadata. It deliberately does not enable d3d_sync, which changes
+Wine command-stream synchronization. Debug logging still affects timing;
+these are correctness tests, not throughput measurements.
+
+Validation evidence (relative to native/windows/test-output)
+-----------------------------------------------------------
+Original NVIDIA reproduction:
+  graphics-09/textures-f42b879d222444828c764c2175be6719/result.json
+Original Intel reproduction:
+  graphics-09/textures-7fb346c2d90c46eda60d8b3be20937ec/result.json
+Unchanged-runtime diagnostic unbind control:
+  graphics-09/textures-c5e41032ad504b4eb8fe79206402fbcf/result.json
+
+Ordinary fixed matrix, 24/24 pass (both architectures, both GPUs, with and
+without desktop/swapchain, native and Wine csmt=0/1):
+  graphics-09/context-fix-ordinary-results.json
+Existing shader/static/dynamic/native control regression, csmt=0, 8/8 pass:
+  dpi-08/native-helpers-0d26a516fc284e4ba675032d840784e7/result.json
+Intel foreign-context preservation, x86 and x64, both pass:
+  graphics-09/textures-57226e0d84eb4527ab2029eacf35ab18/result.json
+  graphics-09/textures-e798d502cc0e46f48189aa6c6db94f5d/result.json
+
+Candidate runtime09-graphics contains frozen 0.8 native/runtime files plus
+only the new WineD3D DLLs. Both-architecture build logs are
+build-wined3d-context09-x86.log and build-wined3d-context09-x64.log.
+Reviewed context_gl.c SHA256:
+  402D00F32C8523FB70394A9015BA0D1630EF10EBD55A5831D28B9CF3EB6A4CEE
+Candidate wined3d.dll SHA256:
+  x86 C5C684D08E6672BD679FE627856BB98F5D7BF172415D607F9D229D81ACB972DE
+  x64 FB154845DDF551CF8E50FF44490A46D152AC273D4B9828C44D788D97CAFB00F8
+
+Earlier component-only limits and subsequent repairs
+---------------------------------------------------
+This establishes a synchronous WineD3D crash fix. Actual Astalon testing on
+runtime09-graphics now survives the previous csmt=0 crash but still stalls
+at the same six save-loading messages. It does not fix the default csmt=1
+black startup; that mode passes this small fixture before and after patching.
+
+NVIDIA foreign-GL creation of a second Wine D3D11 device hangs during adapter
+caps initialization in both csmt modes. Native D3D11 controls pass. The same
+hang is reproduced with unchanged 0.8 csmt=1, so it predates this patch:
+  graphics-09/textures-76bbfca011744c1a8b28c73667819d1c/result.json
+Candidate x86/x64 records (watchdog exit 124, not passing coverage):
+  graphics-09/textures-093c65cc47f549a680c4c3863be3c718/result.json
+  graphics-09/textures-9abebb4e38bf41749cb33438f5f30b74/result.json
+The last trace shows Wine DXGID3D10CreateDevice(flags=0x9) on another thread
+while the main thread is creating the native WGL caps context.
+
+Actual Astalon default-mode diagnostics now prove the native driver enters
+Wine's public D3D11CreateDevice first. The validated x86 frame-pointer chain,
+NVIDIA call instruction and saved function pointer agree:
+  graphics-09/astalon-48476-call-proof.json
+  graphics-09/astalon-nvidia-callsite.txt
+  graphics-09/astalon-48476-stacks.txt
+The NVIDIA return address is nvoglv32+0x88a5cb; the indirect call target is
+Wine d3d11+0x5870 (D3D11CreateDevice). That thread then waits in Wine's mutex;
+Wine's command-stream worker is inside NVIDIA via glClientWaitSync. Native
+DXGI is loaded alongside Wine DXGI, but no native D3D11 was loaded. WCT alone
+did not report a cycle; the stronger evidence is the saved call/frame state.
+
+The earlier native graphics routing covered only DXGI factory entrypoints.
+Forwarding DXGID3D10CreateDevice based solely on its immediate caller would
+miss this case, because its caller is already Wine D3D11. The new boundary in
+dlls/d3d11/d3d11_main.c passes the original public-constructor caller to the
+native shim. graphics-backend.cpp classifies genuine Windows module paths;
+application / Wine callers retain the original Wine implementation. The
+native constructor is loaded by a fixed system path, verified by backing-file
+identity and retained for returned COM object lifetimes. Native failure is
+final and never retries through Wine. No graphics APIs are selected merely
+by DLL basename. Return-address tail-call ambiguity remains a known limit.
+
+The first combined runtime09-driver advanced beyond the driver deadlock,
+then exposed an existing display shim crash. Native EnumDisplaySettingsA
+sets dmSize=124 and dmDriverExtra=0 before calling its extended API; the
+wide variant sets188/0. The old shim bypassed that initialization. With a
+driver's zero-sized input, native ExA computed an underflowed copy length
+of0xffffffe0 and overwrote its stack. Offline proof:
+  graphics-09/native-bridge-display-crash-proof.json
+  graphics-09/native-enum-display-simple-a.txt
+  graphics-09/native-enum-display-simple-w.txt
+  graphics-09/native-enum-display-exa-copy.txt
+
+display.cpp now preserves simple-API normalization and bounds virtual /
+registry output copies to the supplied legacy/full DEVMODE size. Genuine
+Windows EnumDisplaySettings and GetDeviceCaps callers query physical modes;
+ordinary application / Wine queries retain virtual modes. Nested query scopes
+restore their previous depth and application callbacks regain virtual query
+behavior. ChangeDisplaySettings modeset safeguards remain unchanged.
+
+Isolated runtime09-display combines these repairs with the exact reviewed
+cf4a808 desktop.cpp, not the separately pending window-lookup change. No
+production file was swapped to construct it. Complete build configuration,
+immutable source hash and selected source inputs are recorded in:
+  graphics-09/display-source-snapshot/provenance.json
+  graphics-09/display-source-snapshot/source-inputs.json
+  build-runtime09-display-x64.log
+  build-runtime09-display-x86.log
+
+Display API validation passes600/600 guarded cases covering current,
+registry and indexed modes, x86/x64, host/native-prefix/Wine-physical/
+Wine-virtual/host-after. Native host modes remain unchanged. Registry-mode
+overlay intentionally reports the session's initial current mode for Wine;
+native paths retain the independently measured host registry mode.
+  display-api-09/run-56e23791a8154c7da0a7036395b80829/result.json
+
+Priority NVIDIA x86 csmt=1 foreign-context test now passes without synthetic
+backend warmup or diagnostic unbinding. Native driver call succeeds and the
+application device/context/adapter vtables still belong to Wine. Exact pixels,
+query completion, deferred commands and full device destruction pass:
+  graphics-09/textures-6bbb170e362449db8fd9d9e9763e247f/result.json
+The earlier failed runtime09-driver case remains preserved:
+  graphics-09/textures-5a3d6b5570ab4bc48304f994d82a068a/result.json
+
+Fresh-prefix x86 backend contract control separately verifies application
+caller rejection with unchanged result/LastError, final native invalid-SDK
+errors for both constructors, native backend COM ownership and subsequent
+ordinary Wine object ownership. Its native D3D11 IAT binds
+CreateDXGIFactory2 to Wine DXGI on this host; existing caller-aware factory
+routing safely supplies the native factory. Actual native D3D11 PE imports
+contain no other DXGI entries on this tested Windows installation.
+  graphics-09/textures-dcfa6acce3eb4f87aaf5f2cfe3db3635/result.json
+That synthetic caller-address control tests the helper contract; the actual
+NVIDIA stack and ordinary foreign-context case establish driver provenance.
+Actual Astalon validation with runtime09-display and default CSMT now passes
+the setup screen, animated DANGEN intro, title/menu, new save-slot selection
+and multiple in-game dialogue transitions. The HUD appeared; Left changed
+facing, Right produced slight motion and S produced a clear jump. The Player
+log contains real Wine GLSL compilation; selected Wine D3D11/DXGI remain
+the game providers. New 0.dat and GameData.dat files are private to the
+prefix's LocalLow directory. The owned session was then closed and an
+exclusive prefix lock confirmed it was idle. This is bounded startup and
+early-game validation, not a long-session, completed-playthrough or audio
+quality claim.
+  games-09/astalon-driverfix09-launch.json
+  games-08/astalon-1.1.0/drive_c/GOG Games/Astalon/winedows-player-driverfix09.log
+
+Final combined runtime09-desktop validation passes 47/47 process cases:
+  1 priority x64 NVIDIA foreign-context case, without backend warmup;
+  24 ordinary texture/query/deferred/teardown cases across x86/x64,
+     Intel/NVIDIA, native/Wine csmt=0/1 and desktop+swapchain on/off;
+  12 foreign-GL preservation cases across x86/x64, Intel/NVIDIA and
+     native/Wine csmt=0/1;
+  2 fresh-prefix native-backend contract cases, one per architecture;
+  8 existing real-shader readback cases covering static/dynamic imports,
+    x86/x64 and native/Wine, with synchronous Wine command streams.
+
+Aggregate evidence:
+  graphics-09/final-priority-results.json
+  graphics-09/final-ordinary-results.json
+  graphics-09/final-interop-results.json
+  graphics-09/final-contract-results.json
+  dpi-08/native-helpers-b7a38741d9794ed2afe2f23c3b748a7c/result.json
+  graphics-09/final-capture-audit.json
+  graphics-09/final-stage-hashes.json
+
+The combined stage includes the separately reviewed native window-lookup
+changes. All tested stage hashes remained unchanged. No probe timed out;
+captured logs have no truncation, incomplete drains or read/write errors.
+GL_RENDERER confirms Intel UHD Graphics 770 for default preference and
+NVIDIA RTX 4090 for discrete preference, in both architectures. Final x86
+and x64 backend contracts both show native device/context vtables, final
+E_INVALIDARG for invalid native SDK requests, then selected Wine game
+device/context/adapter vtables. Native D3D11's CreateDXGIFactory2 IAT targets
+Wine DXGI in both cases and succeeds through the caller-aware native-factory
+route. Other Windows versions' private D3D11/DXGI import layouts remain
+untested. These are bounded correctness checks, not performance benchmarks.
+
+Unity redirects WineCRT stderr into its Player log after initialization.
+The actual Astalon failure is retained in games-08/astalon-1.1.0/drive_c/
+GOG Games/Astalon/winedows-player-csmt0-debug09.log, lines 13380-13392.
+The outer capture pipe alone does not contain those late diagnostics.
+
+Relevant upstream API references
+-------------------------------
+https://registry.khronos.org/OpenGL/extensions/ARB/WGL_ARB_create_context.txt
+https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglmakecurrent
+https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglsharelists
+The driver-specific current/share failure above is measured behavior; these
+references do not establish that every WGL implementation must reject it.

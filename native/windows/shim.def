@@ -1,0 +1,7 @@
+EXPORTS
+    DetourFinishHelperProcess @1
+    WinedowsEntry @2
+    WinedowsLoadSystemXInput @3
+    WinedowsCreateSystemDXGIFactory @4
+    WinedowsLoadSystemVulkan @5
+    WinedowsCreateSystemD3D11Device @6

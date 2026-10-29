@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "wine-11.0-native-windows",
+  "upstreamUrl": "https://github.com/wine-mirror/wine.git",
+  "commit": "db11d0fe6a169c457e23d007e20404643d067aa8",
+  "patches": [
+    {
+      "path": "patches/wine-11.0/native-windows.patch",
+      "sha256": "5353b39e5c9b3ea3e4d6719dacbac9a6939c20069795a30a526b9c60642f984b"
+    }
+  ]
+}

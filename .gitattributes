@@ -1,0 +1,6 @@
+# Keep checksum inputs byte-for-byte across Windows and Unix checkouts.
+/wine-source.json -text
+/patches/** -text
+
+# Bash requires LF even when the user's Git configuration enables autocrlf.
+*.sh text eol=lf
