@@ -8,17 +8,10 @@
 #include "media-state.h"
 #include "media-controller.h"
 #include "media-notifications.h"
+#include "prefix-session.h"
 #include "detours.h"
 #include <dbghelp.h>
 using namespace wd;
-struct SessionLock {
-    HANDLE handle=INVALID_HANDLE_VALUE;
-    explicit SessionLock(const str &root) {
-        mkdirs(root+L"\\.winedows");handle=CreateFileW((root+L"\\.winedows\\session.lock").c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,0,nullptr);
-        if(handle==INVALID_HANDLE_VALUE)throw std::runtime_error("Prefix is busy or cannot be locked. Close its running loader before modifying or starting another session.");
-    }
-    ~SessionLock(){if(handle!=INVALID_HANDLE_VALUE)CloseHandle(handle);}
-};
 static void usage() {
     puts("CaskWin - native Windows backend for Wine (experimental)\n"
          "wine64 [--prefix DIR] init\n"
@@ -47,7 +40,7 @@ int wmain(int argc,wchar_t **argv) {
         }
         if(i==argc || str(argv[i])==L"--help") {usage();return 0;}
         str cmd=argv[i++];
-        if(cmd==L"--version") {puts("CaskWin 0.10-alpha / native Windows backend");return 0;}
+        if(cmd==L"--version") {puts("CaskWin 0.11-alpha / native Windows backend");return 0;}
         if(cmd==L"gpu")return graphics_probe();
         if(p.empty())p=env(L"USERPROFILE")+L"\\.winedows";
         Prefix prefix(p);
@@ -65,7 +58,11 @@ int wmain(int argc,wchar_t **argv) {
             auto result=control_media(prefix.root,swap?MediaControl::swap:operation==L"eject"?MediaControl::eject:MediaControl::load,upper-L'A',source,label);
             printf("%s (change %lu)\n",utf8(result.message).c_str(),result.changes);return 0;
         }
-        SessionLock lock(prefix.root);
+        bool maintenance=cmd==L"init"||cmd==L"wineboot"||cmd==L"drive"||cmd==L"reg";
+        PrefixSession session(prefix,!maintenance);
+        // Another loader may have initialized the prefix while we waited for
+        // admission. Joiners must never import text hives or reset live state.
+        prefix.load();
         if(cmd==L"init" || cmd==L"wineboot") {prefix.init();printf("Prefix ready: %s\n",utf8(prefix.root).c_str());return 0;}
         if(cmd==L"drive") {
             if(i>=argc)throw std::runtime_error("Expected drive list, map, mount or audio");str op=argv[i++];
@@ -91,7 +88,7 @@ int wmain(int argc,wchar_t **argv) {
                 puts("");
             }return 0;
         }
-        prefix.init();
+        if(session.owner())prefix.init();
         if(cmd==L"reg") {
             if(i>=argc)throw std::runtime_error("Expected reg import or export");str op=argv[i++];
             if(op==L"import") {
@@ -107,19 +104,30 @@ int wmain(int argc,wchar_t **argv) {
         if((cmd==L"explorer"||cmd==L"explorer.exe")&&i<argc&&starts(argv[i],L"/desktop=")){
             desktop=str(argv[i++]).substr(9);if(i>=argc)throw std::runtime_error("Missing virtual desktop program");cmd=argv[i++];
         }
+        MediaSession media_session(prefix,session.owner()?MediaSessionMode::create:MediaSessionMode::attach);
+        auto live_prefix=media_session.view();
         str exe;
         if(cmd.size()>2 && cmd[1]==L':') {
-            exe=prefix.translate(cmd);
+            exe=live_prefix->translate(cmd);
+            int drive=live_prefix->drive_index(exe);
+            if(drive>=0&&!media_session.snapshot(drive).present)throw std::runtime_error("Program is on an ejected virtual medium");
             if(GetFileAttributesW(exe.c_str())==INVALID_FILE_ATTRIBUTES)exe=fullpath(cmd);
         } else exe=fullpath(cmd);
+        auto media_identity=media_session.path_identity(exe);
+        auto check_start_medium=[&]{if(media_identity.drive>=0){
+            auto state=media_session.snapshot(media_identity.drive);
+            if(!state.present||(media_identity.medium&&media_identity.medium!=state.medium))throw std::runtime_error("Program is on an unavailable virtual medium");
+        }};
+        check_start_medium();
         if(GetFileAttributesW(exe.c_str())==INVALID_FILE_ATTRIBUTES)throw std::runtime_error("Program not found");
         str line=quote(exe);for(;i<argc;i++)line+=L" "+quote(argv[i]);
         prefix.environment();SetEnvironmentVariableW(L"WINEDOWS_APPDIR",directory(exe).c_str());
-        MediaSession media_session(prefix,MediaSessionMode::create);
-        MediaController media_controller(prefix,media_session);
+        std::unique_ptr<MediaController> media_controller;
+        if(session.owner())media_controller=std::make_unique<MediaController>(prefix,media_session);
         WORD machine=program_machine(exe);
-        str native_directory=prefix.translate(prefix.windows+(machine==IMAGE_FILE_MACHINE_I386?L"\\SysWOW64":L"\\System32"));
-        str other_directory=prefix.translate(prefix.windows+(machine==IMAGE_FILE_MACHINE_I386?L"\\System32":L"\\SysWOW64"));
+        const Prefix &launch_prefix=*live_prefix;
+        str native_directory=launch_prefix.translate(prefix.windows+(machine==IMAGE_FILE_MACHINE_I386?L"\\SysWOW64":L"\\System32"));
+        str other_directory=launch_prefix.translate(prefix.windows+(machine==IMAGE_FILE_MACHINE_I386?L"\\System32":L"\\SysWOW64"));
         if(!SetEnvironmentVariableW(startup_native_environment_name,native_directory.c_str()))check(GetLastError(),"Set private startup DLL directory");
 #ifdef _WIN64
         str dll=module_dir()+L"\\winedows64.dll";
@@ -130,15 +138,15 @@ int wmain(int argc,wchar_t **argv) {
         BOOL lossy=FALSE;int n=WideCharToMultiByte(CP_ACP,WC_NO_BEST_FIT_CHARS,dll.c_str(),-1,nullptr,0,nullptr,&lossy);
         std::string dll_a(n,0);WideCharToMultiByte(CP_ACP,WC_NO_BEST_FIT_CHARS,dll.c_str(),-1,dll_a.data(),n,nullptr,&lossy);
         if(lossy)throw std::runtime_error("Runtime DLL path cannot be represented in the Windows ANSI code page; use an ASCII runtime directory");
-        auto module_policy=select_module_policy(prefix,exe);
+        auto module_policy=select_module_policy(launch_prefix,exe);
         const auto &selected=module_policy.builtins;
         auto builtin_imports=plan_builtin_startup_imports(exe,machine,directory(exe),native_directory,other_directory,selected,[&](const str &path){
-            str native=native_custom_directory(prefix,path,machine);return StartupDirectoryPaths{prefix.translate(native),native};
+            str native=native_custom_directory(launch_prefix,path,machine);return StartupDirectoryPaths{launch_prefix.translate(native),native};
         });
         if(!builtin_imports.transitive_limit.empty())fprintf(stderr,"caskwin: Selected Wine transitive import inspection unavailable: %s. Direct executable imports are still bound.\n",builtin_imports.transitive_limit.c_str());
         auto native_imports=plan_native_startup_imports(exe,machine,directory(exe),native_directory,other_directory,selected,[&](const str &path){
-            str native=native_custom_directory(prefix,path,machine);
-            return StartupDirectoryPaths{prefix.translate(native),native};
+            str native=native_custom_directory(launch_prefix,path,machine);
+            return StartupDirectoryPaths{launch_prefix.translate(native),native};
         });
         if(!native_imports.unsupported_reason.empty())
             fprintf(stderr,"caskwin: Private startup DLL fallback unavailable: %s. Preserving the application's native search path.\n",native_imports.unsupported_reason.c_str());
@@ -146,8 +154,8 @@ int wmain(int argc,wchar_t **argv) {
         for(const auto &binding:native_imports.bindings)injected.push_back(binding.file.path);
         auto disabled_validation=validate_disabled_startup_imports(exe,machine,directory(exe),native_directory,other_directory,injected,module_policy.disabled,
             {env(L"PATH"),[&](const str &path){
-                str native=native_custom_directory(prefix,path,machine);
-                return StartupDirectoryPaths{prefix.translate(native),native};
+                str native=native_custom_directory(launch_prefix,path,machine);
+                return StartupDirectoryPaths{launch_prefix.translate(native),native};
             }});
         std::vector<std::string> dll_names{dll_a};
         for(const auto &path:injected){
@@ -157,23 +165,30 @@ int wmain(int argc,wchar_t **argv) {
             dll_names.push_back(name);
         }
         std::vector<const char*> dlls;for(const auto &name:dll_names)dlls.push_back(name.c_str());
-        STARTUPINFOW si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
-        HANDLE job=CreateJobObjectW(nullptr,nullptr);if(!job)check(GetLastError(),"Create process job");
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if(!SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))check(GetLastError(),"Configure process job");
-        DesktopHost desktop_host(prefix,exe,desktop,job);
-        MediaNotifications media_notifications(media_session,job,desktop_host.window());
+        PROCESS_INFORMATION pi{};
+        std::unique_ptr<DesktopHost> desktop_host;
+        std::unique_ptr<MediaNotifications> media_notifications;
+        if(session.owner()){
+            session.create_job(media_session.name());
+            str specification=desktop_specification(prefix,exe,desktop);
+            desktop_host=std::make_unique<DesktopHost>(prefix,exe,specification,session.job());
+            media_notifications=std::make_unique<MediaNotifications>(media_session,session.job(),desktop_host->window());
+            session.publish(specification,desktop_host->window());
+        }else session.attach_desktop(desktop.empty()?str():desktop_specification(prefix,exe,desktop));
+        auto &startup=session.startup();
         bool debug=env(L"WINEDOWS_DEBUG")==L"1";
-        if(!DetourCreateProcessWithDllsW(exe.c_str(),line.data(),nullptr,nullptr,FALSE,CREATE_SUSPENDED|(debug?DEBUG_ONLY_THIS_PROCESS:0),nullptr,directory(exe).c_str(),&si,&pi,(DWORD)dlls.size(),dlls.data(),nullptr))check(GetLastError(),"Start prefixed application");
+        if(!DetourCreateProcessWithDllsW(exe.c_str(),line.data(),nullptr,nullptr,FALSE,EXTENDED_STARTUPINFO_PRESENT|CREATE_SUSPENDED|(debug?DEBUG_ONLY_THIS_PROCESS:0),nullptr,directory(exe).c_str(),&startup.StartupInfo,&pi,(DWORD)dlls.size(),dlls.data(),nullptr))check(GetLastError(),"Start prefixed application in session jobs (caller job hierarchy must be compatible)");
         try {
-            if(!AssignProcessToJobObject(job,pi.hProcess))check(GetLastError(),"Assign application job");
+            session.started();
             recheck_disabled_startup_imports(disabled_validation);
             bind_native_startup_imports(pi.hProcess,native_imports);
             bind_builtin_startup_imports(pi.hProcess,builtin_imports);
             configure_native_startup(pi.hProcess,machine,native_directory,other_directory);
+            check_start_medium();
             if(ResumeThread(pi.hThread)==(DWORD)-1)check(GetLastError(),"Resume prefixed application");
-        }catch(...){TerminateProcess(pi.hProcess,ERROR_DLL_INIT_FAILED);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);CloseHandle(job);throw;}
+        }catch(...){TerminateProcess(pi.hProcess,ERROR_DLL_INIT_FAILED);WaitForSingleObject(pi.hProcess,5000);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);throw;}
         CloseHandle(pi.hThread);
+        session.release_admission();
         if(debug) {
             bool first_breakpoint=true;
             for(;;) {
@@ -198,7 +213,8 @@ int wmain(int argc,wchar_t **argv) {
             }
         }
         WaitForSingleObject(pi.hProcess,INFINITE);DWORD code=0;GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hProcess);
-        for(;;) {JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info{};if(!QueryInformationJobObject(job,JobObjectBasicAccountingInformation,&info,sizeof(info),nullptr))break;if(!info.ActiveProcesses)break;Sleep(100);}
-        media_notifications.stop();CloseHandle(job);prefix.export_registry();return (int)code;
+        session.wait();
+        if(media_notifications)media_notifications->stop();
+        if(session.owner())prefix.export_registry();return (int)code;
     } catch(const std::exception &e) {fprintf(stderr,"caskwin: %s\n",e.what());return 1;}
 }

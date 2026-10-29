@@ -4,7 +4,7 @@ An experimental native Windows backend for Wine. Run Windows applications
 with private Wine-style prefixes and selectable Wine DLLs on Windows itself,
 without WSL, a Linux VM, or a Unix Wine server.
 
-**Status: 0.10 alpha. Full compatibility parity with Wine on Linux is not implemented.**
+**Status: 0.11 alpha. Full compatibility parity with Wine on Linux is not implemented.**
 
 CaskWin is a standalone project containing the Windows backend, build tooling,
 tests and compatibility patches. Wine is a pinned vendored source dependency,
@@ -35,6 +35,8 @@ CaskWin currently provides:
 
 - Private drive mappings, file and registry redirection, child-process handling,
   and prefix-local named synchronization objects.
+- Independent x86/x64 launches can join an active prefix session and share its
+  live registry, named objects and virtual media.
 - Native Windows builds of Wine DirectDraw, Direct3D 8/9/10/11, WineD3D, D3DX,
   DirectInput, XInput, DirectSound, XAudio, XACT, GDI+, GLU, and selected Vulkan
   and Media Foundation functionality.
@@ -68,7 +70,22 @@ $env:WINEDLLOVERRIDES='d3d9,dsound=b,n'
 `b` selects Wine, `n` selects native Windows/application DLLs, and `b,n` falls
 back to native when the Wine module is unavailable. It does not retry individual
 unsupported API calls. With no overrides, the current default is native.
-Use `--desktop off` to run without the virtual desktop.
+Use `--desktop off` when starting a new session without a virtual desktop.
+
+To run another application in an active prefix, launch it with the same prefix
+path and runtime directory from the same Windows logon. Omit `--desktop` to
+join the current desktop; an explicit matching configuration is accepted and a
+conflicting one is rejected. One desktop configuration is active per prefix.
+Tests verify shared state, process lifetime and cross-architecture windows in
+the same desktop, including preservation of its current virtual display mode.
+
+The first loader owns the session until all its applications and independently
+joined process trees exit, even if its first application exits earlier. Each
+joining loader waits only for the application tree it started. Terminating the
+owner loader ends the whole session; terminating a joining loader ends only its
+tree. Initialization, registry import/export and persistent drive changes require
+an idle prefix.
+Live disc eject, load and swap remain available while applications run.
 
 See [the Windows backend guide](README.caskwin.md) for installation, drives,
 registry management, per-application settings, provider combinations, tests,
@@ -96,10 +113,11 @@ Keep native builds sequential: their intermediate files are shared. Use the
 guide's staging options before rebuilding a runtime that a game is using.
 
 The focus is missing Wine functionality and defects in this Windows backend.
-The next substantial parity gaps are joining an already-running prefix from an
-independent loader, isolating application named pipes while preserving native
-Windows service access, and completing virtual-desktop window/menu handling.
-These remain unsupported; they are not implied by the features listed above.
+Remaining parity gaps include application named-pipe isolation while preserving
+native Windows service access, and incomplete virtual-desktop window/menu handling.
+Prefix joins require the same runtime and Windows logon/session with matching
+elevation. Alias paths and incompatible inherited Windows job hierarchies are
+rejected; multiple independent desktop configurations in one prefix are unsupported.
 For a compatibility report, include the game/version, application architecture,
 CaskWin version, DLL overrides, desktop setting, and whether switching to native
 components changes the result. Do not include game payloads, saves, credentials

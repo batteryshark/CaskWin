@@ -1,4 +1,4 @@
-param([string]$Name='caskwin-0.10-alpha',[string]$RuntimeDirectory,[string]$WineSourceDirectory)
+param([string]$Name='caskwin-0.11-alpha',[string]$RuntimeDirectory,[string]$WineSourceDirectory)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\wine-source.ps1"
 . "$PSScriptRoot\package-source.ps1"
@@ -32,7 +32,7 @@ Copy-Item -LiteralPath "$PSScriptRoot\glu32-notices.txt" -Destination (Join-Path
 Copy-Item -LiteralPath "$repo\README.caskwin.md" -Destination $dest
 Copy-Item -LiteralPath "$PSScriptRoot\prepare-cdda.ps1" -Destination $dest
 @'
-CaskWin 0.10 alpha - native Windows backend with Wine graphics, input, and audio
+CaskWin 0.11 alpha - native Windows backend with Wine graphics, input, and audio
 
 For compatibility, CaskWin keeps the wine.exe, wine32.exe, wine64.exe,
 winedows32.dll and winedows64.dll filenames. Existing .winedows prefix metadata

@@ -95,7 +95,7 @@ static str reg_string(HKEY root,const str &key,const str &name) {
     LSTATUS e=RegGetValueW(root,key.c_str(),name.c_str(),RRF_RT_REG_SZ,nullptr,value,&bytes);
     if(e==ERROR_FILE_NOT_FOUND||e==ERROR_PATH_NOT_FOUND)return {};check(e,"Read Wine desktop setting");return value;
 }
-DesktopHost::DesktopHost(const Prefix &prefix,const str &program,const str &option,HANDLE job) {
+str desktop_specification(const Prefix &prefix,const str &program,const str &option) {
     str specification=option,name;
     if(specification.empty()){
         HKEY hive=prefix.hive();
@@ -107,13 +107,20 @@ DesktopHost::DesktopHost(const Prefix &prefix,const str &program,const str &opti
         }catch(...){RegCloseKey(hive);throw;}RegCloseKey(hive);
         if(!name.empty()&&specification.empty())throw std::runtime_error("Wine desktop has no configured size");
     }
-    SetEnvironmentVariableW(L"WINEDOWS_DESKTOP_HWND",nullptr);
-    if(specification.empty()||specification==L"off")return;
+    if(specification.empty()||specification==L"off")return L"off";
     size_t comma=specification.find(L',');
     if(comma!=str::npos){name=specification.substr(0,comma);specification.erase(0,comma+1);}
     if(name.empty())name=L"Default";
     unsigned w=0,h=0;wchar_t tail=0;
     if(swscanf_s(specification.c_str(),L"%ux%u%c",&w,&h,&tail,1)!=2||w<160||h<100||w>8192||h>8192)throw std::runtime_error("Desktop size must be WIDTHxHEIGHT (160x100 through 8192x8192)");
+    return name+L","+std::to_wstring(w)+L"x"+std::to_wstring(h);
+}
+DesktopHost::DesktopHost(const Prefix &prefix,const str &program,const str &option,HANDLE job) {
+    str specification=desktop_specification(prefix,program,option);
+    SetEnvironmentVariableW(L"WINEDOWS_DESKTOP_HWND",nullptr);
+    if(specification==L"off")return;
+    auto comma=specification.find(L',');str name=specification.substr(0,comma);
+    unsigned w=0,h=0;swscanf_s(specification.c_str()+comma+1,L"%ux%u",&w,&h);
     std::unique_ptr<State> pending(new State);state=pending.get();state->name=name;state->width=w;state->height=h;state->job=job;
     state->ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!state->ready)check(GetLastError(),"Create desktop event");
     state->thread=CreateThread(nullptr,0,State::run,state,0,nullptr);if(!state->thread)check(GetLastError(),"Start desktop host");

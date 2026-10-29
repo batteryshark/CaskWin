@@ -1,5 +1,66 @@
 # Development state
 
+## 0.11 independent prefix-session joining (2026-10-29)
+
+Independent x86/x64 loaders can now join an active prefix. The first loader
+owns its live registry, media controller, named-object namespace, process job
+and optional desktop until the last application exits. Joiners skip prefix
+initialization and registry import/export, preserving current live state.
+Each joined launch has a nested process job and waits for its own descendants;
+the owner waits for all session trees and exports registry state once at the end.
+
+A separate admission file lock covers initialization, endpoint publication,
+process creation/resume, and final empty-job check/export/cleanup. Versioned
+session metadata validates owner PID/creation time, runtime directory and file
+identity, user/logon/session/integrity, and the existing desktop HWND. Loader/shim
+files stay locked against replacement. Windows 10 job-list startup assigns the
+ordered jobs during CreateProcess, avoiding the former suspended-child gap.
+Joined executable resolution uses current media and rejects ejected/stale media.
+No Wine source changes or upstream fixes were made for this feature.
+
+One desktop configuration remains active per prefix. Omitting --desktop joins
+it; matching explicit options are accepted without resetting the current mode;
+conflicting options fail before application execution. Maintenance commands
+remain idle-only. Different runtime directories, alias prefix paths, elevations
+or incompatible inherited host-job hierarchies are rejected. Separate named
+desktops, brokered launch across unrelated supervisor jobs, application named
+pipe isolation and remaining window/menu behavior are still parity gaps.
+
+Runtime stage: test-output/runtime-session-03, reporting CaskWin 0.11-alpha.
+Both native architectures rebuilt. All 82 Wine DLLs are unchanged from the
+standalone 0.10 runtime; native/Wine PE imports and architecture audits pass.
+Final non-GUI tests pass 148 core checks and 70 lifecycle checks, covering all
+four architecture combinations, shared registry/objects/media, startup races,
+no live text-hive reimport, maintenance exclusion, ejected executable rejection,
+owner/joiner termination, descendant survival, and incompatible host-job failure.
+Evidence: test-output/session-runtime03-validation.json and its linked suites.
+Final stage 03 also passes 31 independent shared-desktop checks, existing
+desktop9 and menu12 regressions, with host display and runtime hashes unchanged.
+Evidence: session-desktop-0006b79f97bc49b6bedee66417f52ed8/result.json and
+standalone-validation/session03-regressions-38fbd614d71e419284797da1875ab36c/result.json,
+both relative to test-output. All owned fixture processes exited.
+Verified archive: dist/caskwin-0.11-alpha.zip, 63,646,603 bytes, SHA256
+1EDAD65E58508475763C7D8E4500E50710BD311B0B5CD23BFDD8E23AA863EA5F.
+Extracted package-e89b9ba2a662429e8d86b8d69afbd8b6/result.json passes all
+95 manifest hashes and 42 x86/x64 smoke cases, using the frozen source-matched
+package-caskwin10-fixtures. The runtime and archive are frozen.
+Deterministic termination during application startup was not directly tested;
+the atomic job-list change was independently reviewed. Tests kill loaders after
+application readiness and verify cleanup and stale-session recovery.
+
+Three additional GameRepo candidates were staged from read-only archives into
+private games-12 prefixes, with 970 payload files verified. Cursed Castilla
+showed black Wine-graphics/white native-graphics desktop clients; no gameplay
+established. Ordinary-window capture hit a Computer Use app-approval timeout,
+so that control remains unverified. Dungeons of Infinity 1.2.1 rendered animated
+title/water/credits with confirmed Wine D3D11/DXGI/WineD3D modules; gameplay,
+reliable menu input and audio quality remain unverified. A separately supervised
+32-bit join was cleanly rejected (error 5) while the game continued, reproducing
+the documented inherited-job restriction. Sonic 4 Episode 1's Launch4j launcher
+requested Java Runtime Environment 1.6.0. No Java install, host-registry import,
+game patch or upstream Wine bug investigation followed. All game trials closed.
+Evidence: test-output/games-12/*-observation.json, launch/exit logs and provenance.
+
 ## CaskWin standalone 0.10 checkpoint verified (2026-10-29)
 
 CaskWin is a standalone repository containing our Windows backend, tooling,

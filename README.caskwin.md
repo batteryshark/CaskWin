@@ -23,8 +23,9 @@ Windows' ntdll, kernel32,
 user32, graphics drivers, WASAPI endpoints, and physical input remain host implementations. Prefix
 redirection alone does not inherit the rest of Wine's compatibility behavior.
 
-The current **0.10 alpha** builds 41 Wine modules for each architecture,
-82 DLLs in total. It adds Wine GLU and a narrow virtual-desktop menu adaptation.
+The current **0.11 alpha** builds 41 Wine modules for each architecture,
+82 DLLs in total. It adds independent launches joining an active prefix,
+including shared registry, named objects, media and virtual-desktop state.
 
 CaskWin was previously named Winedows. Existing prefixes and scripts keep working:
 the `.winedows` metadata directory, `WINEDOWS_*` environment variables, and
@@ -145,9 +146,45 @@ $prefix = "$PWD\native\windows\prefixes\my-game"
 
 `WINEPREFIX` selects the prefix when `--prefix` is omitted. `wine64` can launch
 x86 and x64 children, using the corresponding `winedows32.dll` or
-`winedows64.dll`. Keep both DLLs beside the loader. The loader waits for the
-process tree before exporting registry state. Closing/killing the loader
-terminates its job's child processes.
+`winedows64.dll`. Keep both DLLs beside the loader.
+
+The first loader starts and owns a prefix session. Independent x86/x64 loaders
+can join it using the same prefix path and runtime directory, under the same
+Windows logon/session and integrity level. They share the live private registry
+hive, named-object namespace and virtual media state. A differently elevated
+loader or an alternate filesystem alias path is rejected. The session checks the loader/shim file
+identities and holds those files against replacement while it is active.
+
+The owner waits for every application process in the session, including joined
+launches and their descendants. Its first application may exit while a joined
+application continues running. Each joining loader waits only for its own nested
+process tree. Joiners neither initialize the prefix nor import/export registry
+text; the owner exports registry state after all session applications exit.
+Terminating the owner loader ends the entire session. Terminating a joining
+loader ends only the process tree that loader started. Launches from an
+incompatible inherited Windows job hierarchy fail with a diagnostic.
+
+From another terminal, use the same loader directory and prefix to start a
+second application already installed there:
+
+```powershell
+& $wine --prefix $prefix run 'C:\Games\Example\utility.exe'
+```
+
+An active prefix has one desktop configuration. A join with no desktop option
+uses the current configuration, including when the session has no virtual
+desktop. Explicit matching options are accepted. A different name or size, or a
+switch between a virtual desktop and `--desktop off`, is rejected during that
+session. Cross-architecture tests verify actual shared window ancestry and
+preservation of the current virtual mode after a game changes it. An explicit
+match refers to the session's starting configuration; joining does not reset
+the current display mode.
+
+`init`, `wineboot`, `reg import/export`, and `drive list/map/mount/audio` require
+an idle prefix. Live `drive eject`, `drive load` and `drive swap` remain supported
+through the session owner. Wait for the session to end before editing its Wine
+text hives or persistent drive configuration.
+
 Legacy WinExec launches use the same prefix-aware child-process path, including
 unquoted executable names containing spaces. Legacy OpenFile can reopen a file
 whose short guest path is backed by a long physical prefix directory; its
@@ -158,8 +195,9 @@ The Detours adapter checks actual process bitness before modifying a child;
 this avoids an address-dependent AnyCPU failure in the 32-bit import updater.
 
 Application and Wine named mutexes, events, semaphores, shared-memory sections,
-and timers use a session namespace shared by that prefix's children. This
-includes CLR-created objects, cross-architecture children, Local/Global names,
+and timers use a session namespace shared by that prefix's independently launched
+applications and their children. This includes CLR-created objects,
+cross-architecture children, Local/Global names,
 duplicate handles and reopening queried physical names. Different prefixes and
 ordinary host objects remain separate. Native Windows backend callers keep their
 host namespace using bounded caller classification. This covers ordinary
@@ -189,13 +227,14 @@ expose 2352-byte PCM. EDC/ECC correction, raw data-sector reads, multiple FILE
 entries, audio-only CUEs, MODE2, and subchannel data are not implemented.
 
 Games can eject and reinsert the same virtual medium through storage IOCTLs.
-Presence, removal locks, and media-change counters are shared by all children
-in the loader session, including children of the other architecture. Empty
-drives retain their letter and device identity; file reads, directory queries,
+Presence, removal locks, and media-change counters are shared by all applications
+in the prefix session, including independent joins and other-architecture children.
+Empty drives retain their letter and device identity; file reads, directory queries,
 new mappings, and media-dependent queries return not-ready. Reloading restores
-the private snapshot and resets the CD-audio read cursor. Each new loader
-session begins with its configured medium present. Already mapped pages and
-in-flight I/O are not revoked. Ambiguous overlapping or redirected directory
+the private snapshot and resets the CD-audio read cursor. Each new prefix session
+begins with its configured medium present; joining an existing session does not
+reset its media state. Already mapped pages and in-flight I/O are not revoked.
+Ambiguous overlapping or redirected directory
 mappings cannot be ejected.
 
 While the loader is running, a second terminal can control its virtual drive:
@@ -207,17 +246,17 @@ While the loader is running, a second terminal can control its virtual drive:
 & $wine --prefix $prefix drive load d
 ```
 
-The active loader prepares and publishes each new immutable ISO/CUE snapshot.
-Its children see the new label, serial, geometry, files, TOC and audio without
-restarting. Persistent drive configuration is unchanged, so the next loader
-starts with the originally configured disc. Removal locks reject swaps. Old
+The session owner prepares and publishes each new immutable ISO/CUE snapshot.
+Session applications see the new label, serial, geometry, files, TOC and audio
+without restarting. Persistent drive configuration is unchanged, so the next
+prefix session starts with the originally configured disc. Removal locks reject swaps. Old
 file/directory/raw data handles report media-changed and must be reopened;
 old raw device handles still support verification, drive identity and media
 controls. Existing mapped pages and in-flight reads remain valid. The session
 retains at most 127 media descriptors; cached snapshots are not yet collected.
 Live replacement currently requires an unaliased private ISO/CUE CD drive.
-The loader sends media arrival/removal `WM_DEVICECHANGE` volume notifications to
-windows in its process tree, including children inside the virtual desktop.
+The owner sends media arrival/removal `WM_DEVICECHANGE` volume notifications to
+windows in the shared session job, including children inside the virtual desktop.
 Host windows and other prefixes are excluded. Initial media is silent; swaps
 deliver removal then arrival. Delivery is bounded, so hung recipients can miss
 events and an excessive backlog is diagnosed and resynchronized. Query-remove
@@ -236,8 +275,8 @@ private Windows application hive. Windows `.reg` import supports HKLM, HKCU,
 HKCR, strings, DWORDs, hex types, and value deletions. Existing Wine text hives
 are imported on initial prefix creation. Text edits made while the prefix is
 idle are detected and imported before the next session. Malformed input is
-rejected without overwriting the text or the existing live roots. A session
-lock currently allows one loader process tree per prefix at a time.
+rejected without overwriting the text or the existing live roots. Independent
+launches joining an active session use the live hive without reimporting text.
 Windows `.reg` imports default to the 64-bit view; `/reg:32` and `/reg:64`
 select the intended view. Wine text hives retain their physical registry paths.
 Inherited and duplicated key handles retain their native 32/64-bit view, including
@@ -499,7 +538,9 @@ between them even when the physical monitor does not offer those modes.
 The container changes size; the host monitor mode stays unchanged. WineD3D
 renders and converts the low-color surfaces. Window, monitor, cursor, and
 coordinate APIs provide a virtual desktop view, shared by intercepted child
-processes across architectures. Closing the desktop terminates its process job.
+processes across architectures. Independent joins attach to that same container;
+native USER32 ancestry checks verify both architecture directions. Closing the
+desktop terminates all application trees in the prefix session.
 Monitor selection, work-area queries and DPI-aware screen metrics report the
 virtual bounds. On Windows with mixed-DPI hosting support, the container preserves
 the game's DPI awareness when adopting its windows. Tests cover unaware and
@@ -522,7 +563,10 @@ Persistent settings use Wine's existing keys: set the `Desktop` string under
 `HKCU\Software\Wine\Explorer` to a name, then set that name's string under
 `HKCU\Software\Wine\Explorer\Desktops` to `800x600` (or another size).
 `HKCU\Software\Wine\AppDefaults\game.exe\Explorer\Desktop` selects a per-game
-desktop. `--desktop off` overrides persistent settings for one launch.
+desktop. For a new session, `--desktop off` overrides persistent settings. Joining
+an active session uses its existing desktop unless an explicit matching option
+is supplied; an application-specific setting cannot create a second desktop in
+that session.
 
 Native resource and indirect dialogs, modal/modeless dialogs, and MessageBox
 variants now stay inside the desktop, retaining logical owners, focus and
@@ -640,8 +684,17 @@ Validation:
 # Package and verify the actual extracted archive:
 # Include AV, D3DX9/10/11, GDI+, XACT, GLU, disabled-DLL and WineD3D Vulkan probes
 # and their fixture assets (including d3dx10-draw.fxo) in FixtureDirectory.
-.\native\windows\package.ps1 -Name 'caskwin-0.10-alpha'
-.\native\windows\test-package.ps1 -Archive '.\native\windows\dist\caskwin-0.10-alpha.zip'
+.\native\windows\package.ps1 -Name 'caskwin-0.11-alpha'
+.\native\windows\test-package.ps1 -Archive '.\native\windows\dist\caskwin-0.11-alpha.zip'
+```
+
+The independent-launch fixtures use disposable prefixes and original test
+programs. Point them at a complete staged runtime:
+
+```powershell
+.\native\windows\test-prefix-session.ps1 -RuntimeDirectory $runtime
+.\native\windows\test-prefix-session-lifecycle.ps1 -RuntimeDirectory $runtime
+.\native\windows\test-prefix-session-desktop.ps1 -RuntimeDirectory $runtime
 ```
 
 Both Wine and native DirectDraw/Direct3D 9 pass surface/device creation and pixel
@@ -665,6 +718,10 @@ x86 also passes; this host lacks native x64 D3D8, where `n,b` falls back to Wine
   content can be read and writes are rejected.
 - Child-process DLL propagation, including x86/x64 transitions and custom
   environment preservation.
+- Independent x86/x64 launches sharing a live prefix hive, named objects and media,
+  owner lifetime through the last process, and separate joining-loader shutdown.
+  Core, lifecycle and shared-desktop fixtures pass, including preservation of
+  live virtual modes and the physical host display mode.
 - Wine/native DLL selection for supported modules, including startup
   imports, basename/full-path loads, and cross-bitness child processes.
 - Wine DirectInput 7/8 keyboard/mouse enumeration, configuration, acquisition,
@@ -782,6 +839,17 @@ cropped title artwork with its supplied native cnc-ddraw wrapper, but crashed
 at startup with Wine DirectDraw. Its failure has not been attributed to either
 upstream Wine or this backend. These additional trials used the preserved 0.10
 runtime before the standalone source-layout migration.
+
+Additional shared-session backend trials rendered Dungeons of Infinity 1.2.1's
+animated title and credits with Wine D3D11/DXGI/WineD3D. Gameplay and reliable
+menu input were not established. A second loader launched from a separately
+supervised host process group was rejected with Windows error 5 while the game
+continued; this is the incompatible caller-job hierarchy limitation described
+above, not successful joining evidence. Cursed Castilla showed blank output in
+both Wine-graphics and native-graphics virtual-desktop trials; its ordinary
+window remains unverified. Sonic 4 Episode 1's supplied launcher requested a
+Java runtime unavailable in the private prefix. These are bounded observations,
+with no upstream Wine bug attribution or game-specific workaround applied.
 
 Nightmare Creatures reaches gameplay inside its virtual desktop. The user
 confirmed music with the GameRepo-provided app-local OGG CD-audio wrapper.

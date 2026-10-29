@@ -12,6 +12,7 @@
 // The value is the exact physical desktop HWND, not a process-local boolean.
 #define WD_DESKTOP_NATIVE_MENU_ROOT L"Winedows.NativeMenuRoot"
 namespace wd {
+str desktop_specification(const Prefix &,const str &program,const str &option);
 class DesktopHost {
     struct State;
     State *state=nullptr;
